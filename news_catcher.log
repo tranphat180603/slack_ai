@@ -1,0 +1,103 @@
+2025-03-07 21:43:09,629 - news_catcher - INFO - Environment variables loaded
+2025-03-07 21:43:09,660 - news_catcher - INFO - Slack client initialized
+2025-03-07 21:43:09,664 - news_catcher - INFO - Starting News Catcher API server
+2025-03-07 21:43:21,264 - news_catcher - INFO - TMAI post command received
+2025-03-07 21:43:21,266 - news_catcher - INFO - Processing URL for TMAI post: https://x.com/aixbt_agent/status/1897560920760762547
+2025-03-07 21:43:21,268 - news_catcher - INFO - Processing URL: https://x.com/aixbt_agent/status/1897560920760762547
+2025-03-07 21:43:21,270 - news_catcher - INFO - URL identified as a tweet
+2025-03-07 21:43:21,271 - news_catcher - INFO - Processing tweet URL: https://x.com/aixbt_agent/status/1897560920760762547
+2025-03-07 21:43:21,273 - news_catcher - INFO - Extracted tweet ID: 1897560920760762547, user ID: aixbt_agent
+2025-03-07 21:43:21,275 - news_catcher - INFO - Fetching tweet content for ID: 1897560920760762547
+2025-03-07 21:43:22,305 - news_catcher - INFO - Successfully retrieved tweet content
+2025-03-07 21:43:22,307 - news_catcher - INFO - Checking for thread with conversation ID: 1897560920760762547
+2025-03-07 21:43:22,308 - news_catcher - INFO - Fetching thread tweets for user aixbt_agent, conversation 1897560920760762547
+2025-03-07 21:43:23,015 - news_catcher - INFO - Found 35 tweets in the thread
+2025-03-07 21:43:23,017 - news_catcher - INFO - Found thread with 35 tweets
+2025-03-07 21:43:23,022 - news_catcher - INFO - Forwarding content to server: http://localhost:8080/receive
+2025-03-07 21:43:25,086 - news_catcher - INFO - Forwarded to server - Status: 200
+2025-03-07 21:43:25,088 - news_catcher - INFO - Processed tweet thread with 35 tweets
+2025-03-07 21:45:21,497 - news_catcher - INFO - TMAI post command received
+2025-03-07 21:45:21,499 - news_catcher - INFO - Processing URL for TMAI post: https://x.com/aixbt_agent/status/1897560920760762547
+2025-03-07 21:45:21,500 - news_catcher - INFO - Processing URL: https://x.com/aixbt_agent/status/1897560920760762547
+2025-03-07 21:45:21,500 - news_catcher - INFO - URL identified as a tweet
+2025-03-07 21:45:21,501 - news_catcher - INFO - Processing tweet URL: https://x.com/aixbt_agent/status/1897560920760762547
+2025-03-07 21:45:21,502 - news_catcher - INFO - Extracted tweet ID: 1897560920760762547, user ID: aixbt_agent
+2025-03-07 21:45:21,503 - news_catcher - INFO - Fetching tweet content for ID: 1897560920760762547
+2025-03-07 21:45:22,248 - news_catcher - INFO - Successfully retrieved tweet content
+2025-03-07 21:45:22,249 - news_catcher - INFO - Checking for thread with conversation ID: 1897560920760762547
+2025-03-07 21:45:22,249 - news_catcher - INFO - Fetching thread tweets for user aixbt_agent, conversation 1897560920760762547
+2025-03-07 21:45:22,688 - news_catcher - INFO - Found 35 tweets in the thread
+2025-03-07 21:45:22,688 - news_catcher - INFO - Found thread with 35 tweets
+2025-03-07 21:45:22,693 - news_catcher - INFO - Forwarding content to server: http://localhost:8080/receive
+2025-03-07 21:45:24,776 - news_catcher - INFO - Forwarded to server - Status: 200
+2025-03-07 21:45:24,813 - news_catcher - INFO - Processed tweet thread with 35 tweets
+2025-03-07 21:58:34,868 - news_catcher - INFO - Environment variables loaded
+2025-03-07 21:58:34,899 - news_catcher - INFO - Slack client initialized
+2025-03-07 21:58:34,906 - news_catcher - INFO - Starting News Catcher API server
+2025-03-07 21:58:42,330 - news_catcher - INFO - TMAI post command received
+2025-03-07 21:58:42,333 - news_catcher - INFO - Processing URL for TMAI post: https://x.com/aixbt_agent/status/1897560920760762547
+2025-03-07 21:58:42,335 - news_catcher - INFO - Processing URL: https://x.com/aixbt_agent/status/1897560920760762547
+2025-03-07 21:58:42,335 - news_catcher - INFO - URL identified as a tweet
+2025-03-07 21:58:42,336 - news_catcher - INFO - Processing tweet URL: https://x.com/aixbt_agent/status/1897560920760762547
+2025-03-07 21:58:42,338 - news_catcher - INFO - Extracted tweet ID: 1897560920760762547, user ID: aixbt_agent
+2025-03-07 21:58:42,338 - news_catcher - INFO - Fetching tweet content for ID: 1897560920760762547
+2025-03-07 21:58:43,274 - news_catcher - INFO - Successfully retrieved tweet content
+2025-03-07 21:58:43,282 - news_catcher - INFO - Checking for thread with conversation ID: 1897560920760762547
+2025-03-07 21:58:43,282 - news_catcher - INFO - Fetching thread tweets for user aixbt_agent, conversation 1897560920760762547
+2025-03-07 21:58:43,594 - news_catcher - ERROR - Error getting thread tweets: 400 Bad Request
+The `tweet.fields` query parameter value [in_reply_to_status_id] is not one of [article,attachments,author_id,card_uri,community_id,context_annotations,conversation_id,created_at,display_text_range,edit_controls,edit_history_tweet_ids,entities,geo,id,in_reply_to_user_id,lang,media_metadata,non_public_metrics,note_tweet,organic_metrics,possibly_sensitive,promoted_metrics,public_metrics,referenced_tweets,reply_settings,scopes,source,text,withheld]
+2025-03-07 21:58:43,608 - news_catcher - INFO - No thread found or single tweet
+2025-03-07 21:58:43,608 - news_catcher - INFO - Forwarding content to server: http://localhost:8080/receive
+2025-03-07 21:58:45,651 - news_catcher - INFO - Forwarded to server - Status: 200
+2025-03-07 21:58:45,659 - news_catcher - INFO - Processed single tweet
+2025-03-07 21:59:57,614 - news_catcher - INFO - Environment variables loaded
+2025-03-07 21:59:57,639 - news_catcher - INFO - Slack client initialized
+2025-03-07 21:59:57,639 - news_catcher - INFO - Starting News Catcher API server
+2025-03-07 21:59:59,007 - news_catcher - INFO - TMAI post command received
+2025-03-07 21:59:59,007 - news_catcher - INFO - Processing URL for TMAI post: https://x.com/aixbt_agent/status/1897560920760762547
+2025-03-07 21:59:59,007 - news_catcher - INFO - Processing URL: https://x.com/aixbt_agent/status/1897560920760762547
+2025-03-07 21:59:59,007 - news_catcher - INFO - URL identified as a tweet
+2025-03-07 21:59:59,007 - news_catcher - INFO - Processing tweet URL: https://x.com/aixbt_agent/status/1897560920760762547
+2025-03-07 21:59:59,007 - news_catcher - INFO - Extracted tweet ID: 1897560920760762547, user ID: aixbt_agent
+2025-03-07 21:59:59,007 - news_catcher - INFO - Fetching tweet content for ID: 1897560920760762547
+2025-03-07 21:59:59,647 - news_catcher - INFO - Successfully retrieved tweet content
+2025-03-07 21:59:59,647 - news_catcher - INFO - Checking for thread with conversation ID: 1897560920760762547
+2025-03-07 21:59:59,647 - news_catcher - INFO - Fetching thread tweets for user aixbt_agent, conversation 1897560920760762547
+2025-03-07 21:59:59,905 - news_catcher - INFO - User aixbt_agent is not the author of the original tweet in this conversation
+2025-03-07 21:59:59,905 - news_catcher - INFO - No thread found or single tweet
+2025-03-07 21:59:59,917 - news_catcher - INFO - Forwarding content to server: http://localhost:8080/receive
+2025-03-07 22:00:01,979 - news_catcher - INFO - Forwarded to server - Status: 200
+2025-03-07 22:00:02,003 - news_catcher - INFO - Processed single tweet
+2025-03-07 22:01:32,417 - news_catcher - INFO - Environment variables loaded
+2025-03-07 22:01:32,448 - news_catcher - INFO - Slack client initialized
+2025-03-07 22:01:32,448 - news_catcher - INFO - Starting News Catcher API server
+2025-03-07 22:01:36,676 - news_catcher - INFO - TMAI post command received
+2025-03-07 22:01:36,680 - news_catcher - INFO - Processing URL for TMAI post: https://x.com/aixbt_agent/status/1897560920760762547
+2025-03-07 22:01:36,680 - news_catcher - INFO - Processing URL: https://x.com/aixbt_agent/status/1897560920760762547
+2025-03-07 22:01:36,680 - news_catcher - INFO - URL identified as a tweet
+2025-03-07 22:01:36,683 - news_catcher - INFO - Processing tweet URL: https://x.com/aixbt_agent/status/1897560920760762547
+2025-03-07 22:01:36,683 - news_catcher - INFO - Extracted tweet ID: 1897560920760762547, user ID: aixbt_agent
+2025-03-07 22:01:36,686 - news_catcher - INFO - Fetching tweet content for ID: 1897560920760762547
+2025-03-07 22:01:37,516 - news_catcher - INFO - Successfully retrieved tweet content
+2025-03-07 22:01:37,516 - news_catcher - INFO - Checking for thread with conversation ID: 1897560920760762547
+2025-03-07 22:01:37,516 - news_catcher - INFO - Fetching thread tweets for user aixbt_agent, conversation 1897560920760762547
+2025-03-07 22:01:37,751 - news_catcher - INFO - Searching for tweets by aixbt_agent in conversation 1897560920760762547
+2025-03-07 22:01:38,332 - news_catcher - INFO - Found 35 tweets by aixbt_agent in conversation 1897560920760762547
+2025-03-07 22:01:38,332 - news_catcher - INFO - No thread found - not enough connected tweets by aixbt_agent
+2025-03-07 22:01:38,332 - news_catcher - INFO - No thread found or single tweet
+2025-03-07 22:01:38,340 - news_catcher - INFO - Forwarding content to server: http://localhost:8080/receive
+2025-03-07 22:01:40,394 - news_catcher - INFO - Forwarded to server - Status: 200
+2025-03-07 22:01:40,394 - news_catcher - INFO - Processed single tweet
+2025-03-07 22:10:56,843 - news_catcher - INFO - TMAI post command received
+2025-03-07 22:10:56,846 - news_catcher - INFO - Processing URL for TMAI post: https://www.coindesk.com/markets/2025/03/07/market-experts-weigh-in-on-trump-s-strategic-bitcoin-reserve-that-takes-out-usd17b-in-potential-selling-from-btc
+2025-03-07 22:10:56,847 - news_catcher - INFO - Processing URL: https://www.coindesk.com/markets/2025/03/07/market-experts-weigh-in-on-trump-s-strategic-bitcoin-reserve-that-takes-out-usd17b-in-potential-selling-from-btc
+2025-03-07 22:10:56,856 - news_catcher - INFO - URL identified as a regular web page
+2025-03-07 22:10:56,857 - news_catcher - INFO - Processing regular URL: https://www.coindesk.com/markets/2025/03/07/market-experts-weigh-in-on-trump-s-strategic-bitcoin-reserve-that-takes-out-usd17b-in-potential-selling-from-btc
+2025-03-07 22:10:57,982 - news_catcher - INFO - Successfully extracted content from URL: https://www.coindesk.com/markets/2025/03/07/market...
+2025-03-07 22:10:58,035 - news_catcher - INFO - Forwarding content to server: http://localhost:8080/receive
+2025-03-07 22:11:00,137 - news_catcher - INFO - Forwarded to server - Status: 200
+2025-03-07 22:11:00,139 - news_catcher - INFO - Processed regular URL
+2025-03-11 17:12:50,741 - news_catcher - INFO - Environment variables loaded
+2025-03-11 17:12:50,742 - news_catcher - INFO - Slack client initialized
+2025-03-11 17:12:50,742 - news_catcher - INFO - GitHub client initialized
+2025-03-11 17:12:50,742 - news_catcher - INFO - Linear client initialized

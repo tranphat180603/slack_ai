@@ -1,0 +1,23 @@
+# Web framework and server
+fastapi>=0.95.0
+uvicorn>=0.21.1
+pydantic>=1.10.7
+python-multipart>=0.0.5  # Required for form parsing
+
+# HTTP and web parsing
+requests>=2.28.2
+aiohttp>=3.8.4
+beautifulsoup4>=4.11.2
+
+# API integrations
+tweepy>=4.14.0  # Twitter/X API
+PyGithub>=1.58.1  # GitHub API
+openai>=1.0.0  # OpenAI API
+
+# Slack integration
+slack_sdk>=3.21.0
+
+# Utilities
+python-dotenv>=1.0.0
+logging>=0.4.9.6
+PyYAML>=6.0  # YAML file parsing for prompts
