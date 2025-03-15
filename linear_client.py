@@ -4,6 +4,8 @@ from typing import Optional, Dict, Any, List
 import logging
 import datetime
 from datetime import timedelta
+import json
+import traceback
 
 logger = logging.getLogger("linear_client")
 
@@ -28,7 +30,7 @@ class LinearTeam:
         self.name = data.get("name", "")
         self.key = data.get("key", "")
         self.description = data.get("description", "")
-        self.members_count = data.get("members", {}).get("totalCount", 0) if data.get("members") else 0
+        self.members_count = data.get("members", {}).get("count", 0) if data.get("members") else 0
 
 class LinearUser:
     def __init__(self, data: Dict[str, Any]):
@@ -56,6 +58,20 @@ class LinearWorkItem:
         self.time_spent = data.get("timeSpent", {}).get("value", 0) if data.get("timeSpent") else 0
         self.time_logged = data.get("timeTracked", 0) if data.get("timeTracked") else 0
 
+class LinearCycle:
+    def __init__(self, data: Dict[str, Any]):
+        self.id = data.get("id", "")
+        self.name = data.get("name", "")
+        self.number = data.get("number", 0)
+        self.starts_at = data.get("startsAt", "")
+        self.ends_at = data.get("endsAt", "")
+        self.completed_at = data.get("completedAt", "")
+        self.progress = data.get("progress", 0)
+        self.scope = data.get("scope", 0)
+        self.completed_scope = data.get("completedScope", 0)
+        self.team = data.get("team", {})
+        self.issues = data.get("issues", {}).get("nodes", []) if data.get("issues") else []
+
 class LinearClient:
     def __init__(self, api_key: str):
         self.api_key = api_key
@@ -65,61 +81,6 @@ class LinearClient:
             "Content-Type": "application/json"
         }
         self.logger = logging.getLogger("linear_client")
-    
-    def get_issue(self, issue_id: str) -> Optional[LinearIssue]:
-        """Get a Linear issue by its ID."""
-        self.logger.info(f"Getting Linear issue with ID: {issue_id}")
-        
-        try:
-            query = """
-            query Issue($id: String!) {
-              issue(id: $id) {
-                id
-                title
-                description
-                state {
-                  name
-                }
-                assignee {
-                  name
-                }
-                labels {
-                  nodes {
-                    name
-                  }
-                }
-                priority
-                createdAt
-              }
-            }
-            """
-            
-            variables = {"id": issue_id}
-            
-            response = requests.post(
-                self.api_url,
-                json={"query": query, "variables": variables},
-                headers=self.headers
-            )
-            
-            self.logger.info(f"Linear API response status: {response.status_code}")
-            
-            if response.status_code == 200:
-                data = response.json()
-                self.logger.info(f"Linear API response: {data}")
-                
-                if "data" in data and data["data"]["issue"]:
-                    return LinearIssue(data["data"]["issue"])
-                else:
-                    self.logger.warning(f"Issue not found: {issue_id}")
-                    return None
-            else:
-                self.logger.error(f"Error getting issue {issue_id}: {response.text}")
-                return None
-            
-        except Exception as e:
-            self.logger.error(f"Exception getting issue {issue_id}: {str(e)}")
-            return None
     
     def get_all_teams(self) -> List[LinearTeam]:
         """Get all teams in the workspace."""
@@ -135,7 +96,9 @@ class LinearClient:
                   key
                   description
                   members {
-                    totalCount
+                    nodes {
+                      id
+                    }
                   }
                 }
               }
@@ -156,9 +119,14 @@ class LinearClient:
                 if "data" in data and "teams" in data["data"]:
                     teams = []
                     for team_data in data["data"]["teams"]["nodes"]:
+                        # Calculate members count from the nodes array
+                        if "members" in team_data and "nodes" in team_data["members"]:
+                            member_count = len(team_data["members"]["nodes"])
+                            team_data["members"] = {"count": member_count}
                         teams.append(LinearTeam(team_data))
                     
                     self.logger.info(f"Retrieved {len(teams)} teams")
+                    self.logger.info(f"Teams: {teams}")
                     return teams
                 else:
                     self.logger.warning("No teams found")
@@ -169,57 +137,6 @@ class LinearClient:
                 
         except Exception as e:
             self.logger.error(f"Exception getting teams: {str(e)}")
-            return []
-    
-    def get_team_members(self, team_id: str) -> List[LinearUser]:
-        """Get all members of a specific team."""
-        self.logger.info(f"Getting members for team ID: {team_id}")
-        
-        try:
-            query = """
-            query TeamMembers($teamId: ID!) {
-              team(id: $teamId) {
-                members {
-                  nodes {
-                    id
-                    name
-                    email
-                    displayName
-                    active
-                    admin
-                  }
-                }
-              }
-            }
-            """
-            
-            variables = {"teamId": team_id}
-            
-            response = requests.post(
-                self.api_url,
-                json={"query": query, "variables": variables},
-                headers=self.headers
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                if "data" in data and "team" in data["data"] and data["data"]["team"]:
-                    members = []
-                    for member_data in data["data"]["team"]["members"]["nodes"]:
-                        members.append(LinearUser(member_data))
-                    
-                    self.logger.info(f"Retrieved {len(members)} members for team {team_id}")
-                    return members
-                else:
-                    self.logger.warning(f"Team not found: {team_id}")
-                    return []
-            else:
-                self.logger.error(f"Error getting team members: {response.text}")
-                return []
-                
-        except Exception as e:
-            self.logger.error(f"Exception getting team members: {str(e)}")
             return []
     
     def get_all_users(self) -> List[LinearUser]:
@@ -356,7 +273,7 @@ class LinearClient:
             self.logger.error(f"Exception getting user work items: {str(e)}")
             return []
     
-    def get_user_time_entries(self, user_id: str, start_date: str, end_date: str) -> List[Dict[str, Any]]:
+    def get_user_time_entries(self, user_id: str, start_date: str, end_date: str) -> Dict[str, Any]:
         """
         Get time entries for a specific user within a date range.
         
@@ -448,137 +365,746 @@ class LinearClient:
                 "entries": []
             }
     
-    def get_team_working_hours(self, team_id: str) -> Dict[str, Any]:
+    def get_cycle_data(self, team_key: str = None, current: bool = True, cycle_number: int = None) -> Dict[str, Any]:
         """
-        Get working hours for all members of a team for the current week.
+        Get data about cycles for a team. Can retrieve the current cycle or a specific cycle by number.
         
         Parameters:
-        - team_id: The Linear team ID
+        - team_key: The Linear team key (e.g., "ENG"). If None, will try to get cycles across all teams.
+        - current: If True, retrieves the current active cycle. If False, uses cycle_number.
+        - cycle_number: The specific cycle number to retrieve. Only used if current=False.
+        
+        Returns:
+        - A dictionary containing cycle data
         """
-        self.logger.info(f"Getting working hours for team {team_id} for the current week")
+        self.logger.info(f"Getting cycle data for team: {team_key}, current: {current}, cycle_number: {cycle_number}")
         
         try:
-            # Get all team members
-            members = self.get_team_members(team_id)
+            # First, we need to get the team ID from the team key
+            if team_key:
+                team_query = """
+                query TeamByKey($teamKey: String!) {
+                  teams(filter: {key: {eq: $teamKey}}) {
+                    nodes {
+                      id
+                      name
+                      key
+                    }
+                  }
+                }
+                """
+                
+                team_response = requests.post(
+                    self.api_url,
+                    json={"query": team_query, "variables": {"teamKey": team_key}},
+                    headers=self.headers
+                )
+                
+                if team_response.status_code != 200:
+                    self.logger.error(f"Error getting team ID: {team_response.text}")
+                    return {"error": f"Failed to retrieve team ID for key {team_key}"}
+                
+                team_data = team_response.json().get("data", {}).get("teams", {}).get("nodes", [])
+                if not team_data:
+                    return {"error": f"Team not found with key: {team_key}"}
+                
+                team_id = team_data[0]["id"]
+                
+                # Now build the query for cycle data with the team ID
+                if current:
+                    query = """
+                    query TeamCurrentCycle($teamId: String!) {
+                      team(id: $teamId) {
+                        id
+                        name
+                        key
+                        activeCycle {
+                          id
+                          name
+                          number
+                          startsAt
+                          endsAt
+                          completedAt
+                          progress
+                          issues {
+                            nodes {
+                              id
+                              title
+                              state {
+                                name
+                                type
+                              }
+                              assignee {
+                                id
+                                name
+                              }
+                              completedAt
+                              estimate
+                              priority
+                            }
+                          }
+                        }
+                      }
+                    }
+                    """
+                    variables = {"teamId": team_id}
+                else:
+                    query = """
+                    query TeamCycleByNumber($teamId: String!, $cycleNumber: Int!) {
+                      team(id: $teamId) {
+                        id
+                        name
+                        key
+                        cycles(filter: {number: {eq: $cycleNumber}}) {
+                          nodes {
+                            id
+                            name
+                            number
+                            startsAt
+                            endsAt
+                            completedAt
+                            progress
+                            issues {
+                              nodes {
+                                id
+                                title
+                                state {
+                                  name
+                                  type
+                                }
+                                assignee {
+                                  id
+                                  name
+                                }
+                                completedAt
+                                estimate
+                                priority
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                    """
+                    variables = {"teamId": team_id, "cycleNumber": cycle_number}
+            else:
+                # Get all active cycles across teams
+                query = """
+                query AllTeamsCycles {
+                  teams {
+                    nodes {
+                      id
+                      name
+                      key
+                      activeCycle {
+                        id
+                        name
+                        number
+                        startsAt
+                        endsAt
+                        completedAt
+                        progress
+                      }
+                      cycles(first: 5) {
+                        nodes {
+                          id
+                          name
+                          number
+                          startsAt
+                          endsAt
+                          completedAt
+                          progress
+                        }
+                      }
+                    }
+                  }
+                }
+                """
+                variables = {}
             
-            if not members:
-                self.logger.warning(f"No members found for team {team_id}")
+            response = requests.post(
+                self.api_url,
+                json={"query": query, "variables": variables},
+                headers=self.headers
+            )
+            
+            if response.status_code != 200:
+                self.logger.error(f"Error getting cycle data: {response.text}")
+                return {"error": f"Failed to retrieve cycle data: {response.status_code}"}
+            
+            data = response.json().get("data", {})
+            
+            # Process the response based on the query type
+            if team_key:
+                team_data = data.get("team", {})
+                if not team_data:
+                    return {"error": f"Team not found: {team_key}"}
+                
+                cycle_data = team_data.get("activeCycle" if current else "cycle", {})
+                if not cycle_data:
+                    cycle_type = "current" if current else f"number {cycle_number}"
+                    return {"error": f"No {cycle_type} cycle found for team {team_key}"}
+                
+                # Calculate additional metrics
+                total_issues = len(cycle_data.get("issues", {}).get("nodes", []))
+                completed_issues = sum(1 for issue in cycle_data.get("issues", {}).get("nodes", []) 
+                                     if issue.get("completedAt"))
+                
                 return {
-                    "team_id": team_id,
-                    "members": []
+                    "team": {
+                        "id": team_data.get("id"),
+                        "name": team_data.get("name"),
+                        "key": team_data.get("key")
+                    },
+                    "cycle": {
+                        "id": cycle_data.get("id"),
+                        "name": cycle_data.get("name"),
+                        "number": cycle_data.get("number"),
+                        "starts_at": cycle_data.get("startsAt"),
+                        "ends_at": cycle_data.get("endsAt"),
+                        "completed_at": cycle_data.get("completedAt"),
+                        "progress": cycle_data.get("progress"),
+                        "total_issues": total_issues,
+                        "completed_issues": completed_issues,
+                        "completion_percentage": round((completed_issues / total_issues) * 100, 2) if total_issues else 0,
+                        "issues": cycle_data.get("issues", {}).get("nodes", [])
+                    }
                 }
-            
-            # Calculate the start and end of the current week (Monday to Sunday)
-            today = datetime.datetime.now()
-            start_of_week = today - timedelta(days=today.weekday())
-            start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
-            end_of_week = start_of_week + timedelta(days=6, hours=23, minutes=59, seconds=59)
-            
-            # Format dates for the API
-            start_date = start_of_week.isoformat() + "Z"
-            end_date = end_of_week.isoformat() + "Z"
-            
-            # Get time entries for each member
-            member_hours = []
-            for member in members:
-                time_data = self.get_user_time_entries(member.id, start_date, end_date)
+            else:
+                # Process data for all teams
+                teams_data = data.get("teams", {}).get("nodes", [])
+                teams_with_cycles = []
                 
-                member_info = {
-                    "id": member.id,
-                    "name": member.name,
-                    "email": member.email,
-                    "display_name": member.display_name,
-                    "total_hours": time_data.get("total_hours", 0),
-                    "total_seconds": time_data.get("total_seconds", 0),
-                    "required_hours": 40,  # Default, can be customized
-                    "missing_hours": max(0, 40 - time_data.get("total_hours", 0)),  # Default 40 hour work week
-                    "entries_count": len(time_data.get("entries", []))
+                for team in teams_data:
+                    active_cycle = team.get("activeCycle", {})
+                    recent_cycles = team.get("cycles", {}).get("nodes", [])
+                    
+                    teams_with_cycles.append({
+                        "team": {
+                            "id": team.get("id"),
+                            "name": team.get("name"),
+                            "key": team.get("key")
+                        },
+                        "active_cycle": active_cycle if active_cycle else None,
+                        "recent_cycles": recent_cycles
+                    })
+                
+                return {
+                    "teams_count": len(teams_with_cycles),
+                    "teams": teams_with_cycles
                 }
-                
-                member_hours.append(member_info)
-            
-            # Summarize team data
-            team_data = {
-                "team_id": team_id,
-                "members": member_hours,
-                "week_start_date": start_of_week.strftime("%Y-%m-%d"),
-                "week_end_date": end_of_week.strftime("%Y-%m-%d"),
-                "total_team_hours": sum(m.get("total_hours", 0) for m in member_hours),
-                "avg_team_hours": round(sum(m.get("total_hours", 0) for m in member_hours) / len(member_hours), 2) if member_hours else 0
-            }
-            
-            self.logger.info(f"Retrieved working hours for {len(member_hours)} members in team {team_id}")
-            return team_data
                 
         except Exception as e:
-            self.logger.error(f"Exception getting team working hours: {str(e)}")
-            return {
-                "team_id": team_id,
-                "members": [],
-                "error": str(e)
-            }
+            self.logger.error(f"Exception getting cycle data: {str(e)}")
+            return {"error": str(e)}
     
-    def get_all_teams_working_hours(self) -> List[Dict[str, Any]]:
-        """Get working hours for all teams in the workspace for the current week."""
-        self.logger.info("Getting working hours for all teams")
-        
-        teams = self.get_all_teams()
-        if not teams:
-            self.logger.warning("No teams found in workspace")
-            return []
-        
-        all_team_data = []
-        for team in teams:
-            team_hours = self.get_team_working_hours(team.id)
-            all_team_data.append({
-                "team_id": team.id,
-                "team_name": team.name,
-                "team_key": team.key,
-                "week_data": team_hours
-            })
-        
-        self.logger.info(f"Retrieved working hours for {len(all_team_data)} teams")
-        return all_team_data
-    
-    def find_users_not_meeting_required_hours(self, required_hours: int = 40) -> List[Dict[str, Any]]:
-        """
-        Find all users across the workspace who haven't met their required working hours this week.
-        
-        Parameters:
-        - required_hours: The number of required working hours per week (default: 40)
-        """
-        self.logger.info(f"Finding users not meeting required hours ({required_hours}h)")
+    def get_comprehensive_cycle_data(self, cycle_id: str) -> Dict[str, Any]:
+        """Get comprehensive data for a specific cycle."""
+        self.logger.info(f"Getting comprehensive data for cycle: {cycle_id}")
         
         try:
-            all_teams_data = self.get_all_teams_working_hours()
+            # Step 1: Get basic cycle details with more detailed error logging
+            cycle_query = """
+            query CycleBasicDetails($id: String!) {
+              cycle(id: $id) {
+                id
+                name
+                number
+                startsAt
+                endsAt
+                completedAt
+                progress
+                team {
+                  id
+                  name
+                  key
+                }
+              }
+            }
+            """
             
-            users_not_meeting_hours = []
+            variables = {"id": cycle_id}
             
-            for team_data in all_teams_data:
-                team_week_data = team_data.get("week_data", {})
-                team_members = team_week_data.get("members", [])
+            # Add debugging to track the exact response
+            self.logger.info(f"Querying cycle basic details for cycle ID: {cycle_id}")
+            response = requests.post(
+                self.api_url,
+                json={"query": cycle_query, "variables": variables},
+                headers=self.headers
+            )
+            
+            self.logger.info(f"Cycle basic details response status: {response.status_code}")
+            
+            if response.status_code != 200:
+                self.logger.error(f"Error getting basic cycle data: {response.text}")
+                return {"error": f"Failed to retrieve cycle data: {response.status_code}"}
+            
+            response_data = response.json()
+            
+            # Debug the actual response structure
+            self.logger.debug(f"Cycle query response: {json.dumps(response_data)[:500]}...")
+            
+            if "errors" in response_data:
+                error_msg = response_data["errors"][0]["message"] if response_data["errors"] else "Unknown GraphQL error"
+                self.logger.error(f"GraphQL error: {error_msg}")
+                return {"error": error_msg}
+            
+            # Check for data at each level to identify where NoneType might be occurring
+            if "data" not in response_data:
+                self.logger.error("No 'data' field in cycle query response")
+                return {"error": "Missing data field in API response"}
+            
+            data = response_data.get("data", {})
+            if "cycle" not in data:
+                self.logger.error("No 'cycle' field in cycle query data")
+                return {"error": "Missing cycle field in API response"}
+            
+            cycle_data = data.get("cycle", {})
+            if not cycle_data:
+                self.logger.warning(f"Cycle not found: {cycle_id}")
+                return {"error": f"Cycle not found: {cycle_id}"}
+            
+            # Create a safe structure for comprehensive data with defaults
+            comprehensive_data = {
+                "cycle": {
+                    "id": cycle_data.get("id", ""),
+                    "name": cycle_data.get("name", ""),
+                    "number": cycle_data.get("number", 0),
+                    "starts_at": cycle_data.get("startsAt", ""),
+                    "ends_at": cycle_data.get("endsAt", ""),
+                    "completed_at": cycle_data.get("completedAt"),
+                    "progress": cycle_data.get("progress", 0),
+                    "team": {}
+                },
+                "teams": [],
+                "issues": [],
+                "summary": {
+                    "total_issues": 0,
+                    "total_teams": 0,
+                    "cycle_duration_days": 0,
+                    "overall_completion_rate": 0,
+                    "completed_issues": 0
+                }
+            }
+            
+            # Extract cycle date range with safe access
+            start_date = cycle_data.get("startsAt", "")
+            end_date = cycle_data.get("endsAt", "")
+            
+            # Safely extract team data
+            if cycle_data.get("team"):
+                team_data = cycle_data.get("team", {})
+                comprehensive_data["cycle"]["team"] = {
+                    "id": team_data.get("id", ""),
+                    "name": team_data.get("name", ""),
+                    "key": team_data.get("key", "")
+                }
+            
+            # Step 2: Get issues with safer error handling
+            issues = []
+            try:
+                self.logger.info(f"Fetching issues for cycle {cycle_id}")
+                has_more_issues = True
+                after_cursor = None
+                page_size = 50
                 
-                for member in team_members:
-                    member_hours = member.get("total_hours", 0)
+                while has_more_issues:
+                    # Use a simplified query if needed
+                    issues_query = """
+                    query CycleIssues($id: String!, $first: Int!, $after: String) {
+                      cycle(id: $id) {
+                        issues(first: $first, after: $after) {
+                          nodes {
+                            id
+                            title
+                            description
+                            state {
+                              name
+                              type
+                            }
+                            parent {
+                              id
+                              title
+                            }
+                            children {
+                              nodes {
+                                id
+                                title
+                              }
+                            }
+                            assignee {
+                              id
+                              name
+                            }
+                            team {
+                              id
+                              name
+                              key
+                            }
+                            priority
+                            createdAt
+                            updatedAt
+                            completedAt
+                            estimate
+                            comments {
+                              nodes {
+                                id
+                                body
+                                user {
+                                  name
+                                }
+                                createdAt
+                              }
+                            }
+                          }
+                          pageInfo {
+                            hasNextPage
+                            endCursor
+                          }
+                        }
+                      }
+                    }
+                    """
                     
-                    if member_hours < required_hours:
-                        users_not_meeting_hours.append({
-                            "user_id": member.get("id", ""),
-                            "name": member.get("name", ""),
-                            "email": member.get("email", ""),
-                            "team_name": team_data.get("team_name", ""),
-                            "team_key": team_data.get("team_key", ""),
-                            "logged_hours": member_hours,
-                            "required_hours": required_hours,
-                            "missing_hours": required_hours - member_hours
-                        })
+                    issues_variables = {
+                        "id": cycle_id,
+                        "first": page_size,
+                        "after": after_cursor
+                    }
+                    
+                    issues_response = requests.post(
+                        self.api_url,
+                        json={"query": issues_query, "variables": issues_variables},
+                        headers=self.headers
+                    )
+                    
+                    if issues_response.status_code != 200:
+                        self.logger.error(f"Error fetching cycle issues: {issues_response.text}")
+                        break
+                    
+                    issues_response_data = issues_response.json()
+                    
+                    # Debug the response structure
+                    self.logger.debug(f"Issues query response: {json.dumps(issues_response_data)[:500]}...")
+                    
+                    if "errors" in issues_response_data:
+                        error_msg = issues_response_data["errors"][0]["message"] if issues_response_data["errors"] else "Unknown GraphQL error"
+                        self.logger.error(f"GraphQL error in issues query: {error_msg}")
+                        break
+                    
+                    issues_data = issues_response_data.get("data", {})
+                    cycle_issues = issues_data.get("cycle", {})
+                    
+                    if not cycle_issues:
+                        self.logger.warning("No cycle data returned in issues query")
+                        break
+                        
+                    issues_nodes = cycle_issues.get("issues", {}).get("nodes", [])
+                    self.logger.info(f"Retrieved {len(issues_nodes)} issues in this page")
+                    issues.extend(issues_nodes)
+                    
+                    page_info = cycle_issues.get("issues", {}).get("pageInfo", {})
+                    has_more_issues = page_info.get("hasNextPage", False)
+                    after_cursor = page_info.get("endCursor") if has_more_issues else None
+                
+                self.logger.info(f"Total issues retrieved for cycle {cycle_id}: {len(issues)}")
+            except Exception as e:
+                self.logger.error(f"Error while fetching issues: {str(e)}")
+                # Continue with any issues we've collected so far
             
-            # Sort by missing hours (descending)
-            users_not_meeting_hours.sort(key=lambda x: x.get("missing_hours", 0), reverse=True)
+            # Step 3: Get teams data with better error handling
+            teams_info = []
+            try:
+                teams_query = """
+                query TeamsBasic {
+                  teams(first: 20) {
+                    nodes {
+                      id
+                      name
+                      key
+                    }
+                  }
+                }
+                """
+                
+                teams_response = requests.post(
+                    self.api_url,
+                    json={"query": teams_query},
+                    headers=self.headers
+                )
+                
+                if teams_response.status_code == 200:
+                    teams_response_data = teams_response.json()
+                    if "errors" not in teams_response_data:
+                        teams_data = teams_response_data.get("data", {}).get("teams", {}).get("nodes", [])
+                        teams_info = [{"id": team.get("id"), "name": team.get("name"), "key": team.get("key")} 
+                                    for team in teams_data]
+            except Exception as e:
+                self.logger.error(f"Error fetching teams: {str(e)}")
             
-            self.logger.info(f"Found {len(users_not_meeting_hours)} users not meeting required hours")
-            return users_not_meeting_hours
+            # Update the comprehensive data with what we've collected
+            comprehensive_data["issues"] = [self._issue_to_dict(issue) for issue in issues]
+            comprehensive_data["teams"] = teams_info
+            comprehensive_data["summary"] = {
+                "total_issues": len(issues),
+                "total_teams": len(teams_info),
+                "cycle_duration_days": self._calculate_date_diff(start_date, end_date),
+                "overall_completion_rate": cycle_data.get("progress", 0),
+                "completed_issues": sum(1 for issue in issues if issue.get("completedAt"))
+            }
+            
+            self.logger.info(f"Successfully retrieved comprehensive data for cycle {cycle_id}")
+            return comprehensive_data
             
         except Exception as e:
-            self.logger.error(f"Exception finding users not meeting hours: {str(e)}")
-            return [] 
+            self.logger.error(f"Exception getting comprehensive cycle data: {str(e)}, traceback: {traceback.format_exc()}")
+            return {"error": str(e)}
+
+    def _work_item_to_dict(self, work_item: LinearWorkItem) -> Dict[str, Any]:
+        """Convert a LinearWorkItem to a dictionary."""
+        return {
+            "id": work_item.id,
+            "title": work_item.title,
+            "description": work_item.description,
+            "state": work_item.state,
+            "creator": work_item.creator,
+            "assignee": work_item.assignee,
+            "created_at": work_item.created_at,
+            "updated_at": work_item.updated_at,
+            "completed_at": work_item.completed_at,
+            "cycle": work_item.cycle,
+            "estimate": work_item.estimate,
+            "time_spent": work_item.time_spent,
+            "time_logged": work_item.time_logged
+        }
+
+    def _issue_to_dict(self, issue: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert an issue data dictionary to a standardized format."""
+        # Process comments with better error handling
+        comments = []
+        if issue.get("comments") and issue.get("comments", {}).get("nodes"):
+            for comment in issue.get("comments", {}).get("nodes", []):
+                # Skip invalid comments
+                if not comment:
+                    continue
+                    
+                # Safely extract user name
+                user_name = "Unknown User"
+                if comment.get("user"):
+                    user_name = comment.get("user", {}).get("name", "Unknown User")
+                
+                comments.append({
+                    "body": comment.get("body", ""),
+                    "user": user_name,
+                    "created_at": comment.get("createdAt", "")
+                })
+        
+        return {
+            "id": issue.get("id"),
+            "title": issue.get("title"),
+            "description": issue.get("description"),
+            "state": issue.get("state", {}).get("name") if issue.get("state") else "",
+            "state_type": issue.get("state", {}).get("type") if issue.get("state") else "",
+            "parent": {
+                "id": issue.get("parent", {}).get("id") if issue.get("parent") else "",
+                "title": issue.get("parent", {}).get("title") if issue.get("parent") else ""
+            },
+            "children": [{"id": child.get("id"), "title": child.get("title")} 
+                       for child in issue.get("children", {}).get("nodes", [])] if issue.get("children") else [],
+            "assignee": {
+                "id": issue.get("assignee", {}).get("id") if issue.get("assignee") else "",
+                "name": issue.get("assignee", {}).get("name") if issue.get("assignee") else ""
+            },
+            "team": {
+                "id": issue.get("team", {}).get("id") if issue.get("team") else "",
+                "name": issue.get("team", {}).get("name") if issue.get("team") else "",
+                "key": issue.get("team", {}).get("key") if issue.get("team") else ""
+            },
+            "comments": comments,  # Use our safely processed comments
+            "labels": [{"name": label.get("name"), "color": label.get("color")} 
+                      for label in issue.get("labels", {}).get("nodes", [])],
+            "priority": issue.get("priority"),
+            "created_at": issue.get("createdAt"),
+            "updated_at": issue.get("updatedAt"),
+            "completed_at": issue.get("completedAt"),
+            "estimate": issue.get("estimate"),
+            "project": issue.get("project", {}).get("name") if issue.get("project") else "",
+            "comments_count": len(issue.get("comments", {}).get("nodes", [])) if issue.get("comments") else 0,
+            "history_events": len(issue.get("history", {}).get("nodes", [])) if issue.get("history") else 0
+        }
+
+    def _calculate_date_diff(self, start_date: str, end_date: str) -> int:
+        """Calculate the difference in days between two ISO format dates."""
+        if not start_date or not end_date:
+            return 0
+        
+        try:
+            start = datetime.datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+            end = datetime.datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+            return (end - start).days
+        except Exception:
+            return 0
+
+    def _calculate_overall_completion(self, cycle_data: Dict[str, Any]) -> float:
+        """Calculate the overall completion rate for a cycle."""
+        completed_scope = cycle_data.get("completedScope", 0)
+        total_scope = cycle_data.get("scope", 0)
+        
+        if not total_scope:
+            return 0
+        
+        return round((completed_scope / total_scope) * 100, 2)
+
+    def get_team_recent_cycles(self, team_key: str, limit: int = 10) -> Dict[str, Any]:
+        """
+        Get recent cycles for a specific team, including the active cycle and completed cycles.
+        
+        Parameters:
+        - team_key: The Linear team key (e.g., "ENG")
+        - limit: Maximum number of recent cycles to retrieve
+        
+        Returns:
+        - A dictionary containing team info and cycles data
+        """
+        self.logger.info(f"Getting recent cycles for team: {team_key}, limit: {limit}")
+        
+        try:
+            # First, get the team ID from the team key
+            team_query = """
+            query TeamByKey($teamKey: String!) {
+              teams(filter: {key: {eq: $teamKey}}) {
+                nodes {
+                  id
+                  name
+                  key
+                }
+              }
+            }
+            """
+            
+            team_response = requests.post(
+                self.api_url,
+                json={"query": team_query, "variables": {"teamKey": team_key}},
+                headers=self.headers
+            )
+            
+            if team_response.status_code != 200:
+                self.logger.error(f"Error getting team ID: {team_response.text}")
+                return {"error": f"Failed to retrieve team ID for key {team_key}"}
+            
+            team_data = team_response.json().get("data", {}).get("teams", {}).get("nodes", [])
+            if not team_data:
+                return {"error": f"Team not found with key: {team_key}"}
+            
+            team_id = team_data[0]["id"]
+            
+            # Build query to get both active cycle and recent past cycles
+            query = """
+            query TeamCycles($teamId: String!, $first: Int!) {
+              team(id: $teamId) {
+                id
+                name
+                key
+                activeCycle {
+                  id
+                  name
+                  number
+                  startsAt
+                  endsAt
+                  completedAt
+                  progress
+                }
+                # Get historical completed cycles
+                cycles(first: $first, filter: {completedAt: {neq: null}}) {
+                  nodes {
+                    id
+                    name
+                    number
+                    startsAt
+                    endsAt
+                    completedAt
+                    progress
+                  }
+                }
+              }
+            }
+            """
+            
+            variables = {
+                "teamId": team_id,
+                "first": limit
+            }
+            
+            response = requests.post(
+                self.api_url,
+                json={"query": query, "variables": variables},
+                headers=self.headers
+            )
+            
+            if response.status_code != 200:
+                self.logger.error(f"Error getting team cycles: {response.text}")
+                return {"error": f"Failed to retrieve cycles data: {response.status_code}"}
+            
+            data = response.json().get("data", {})
+            
+            team_data = data.get("team", {})
+            if not team_data:
+                return {"error": f"Team not found: {team_key}"}
+            
+            active_cycle = team_data.get("activeCycle", {})
+            recent_cycles = team_data.get("cycles", {}).get("nodes", [])
+            
+            self.logger.info(f"Retrieved {len(recent_cycles)} historical cycles for team {team_key}")
+            
+            # Process and return the data
+            return {
+                "team": {
+                    "id": team_data.get("id"),
+                    "name": team_data.get("name"),
+                    "key": team_data.get("key")
+                },
+                "active_cycle": active_cycle if active_cycle else None,
+                "recent_cycles": recent_cycles,
+                "cycles_count": len(recent_cycles)
+            }
+                
+        except Exception as e:
+            self.logger.error(f"Exception getting team recent cycles: {str(e)}")
+            return {"error": str(e)}
+    
+    def get_multiple_cycles_data(self, cycles_info: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Get comprehensive data for multiple cycles efficiently.
+        
+        Parameters:
+        - cycles_info: A list of dictionaries containing cycle information, each with at least 'id' key
+        
+        Returns:
+        - A list of comprehensive cycle data dictionaries
+        """
+        self.logger.info(f"Getting comprehensive data for {len(cycles_info)} cycles")
+        
+        results = []
+        
+        for cycle_info in cycles_info:
+            cycle_id = cycle_info.get('id')
+            if not cycle_id:
+                self.logger.warning(f"Skipping cycle with no ID: {cycle_info}")
+                continue
+                
+            # Get comprehensive data for this cycle
+            cycle_data = self.get_comprehensive_cycle_data(cycle_id)
+            
+            # If successful, add to results with team context
+            if "error" not in cycle_data:
+                # Add the team key from the original info if available
+                if "team_key" in cycle_info and "team" in cycle_data["cycle"]:
+                    cycle_data["cycle"]["team"]["key"] = cycle_info.get("team_key")
+                
+                results.append(cycle_data)
+            else:
+                self.logger.error(f"Error getting data for cycle {cycle_id}: {cycle_data.get('error')}")
+        
+        self.logger.info(f"Successfully retrieved data for {len(results)} out of {len(cycles_info)} cycles")
+        return results
+        
