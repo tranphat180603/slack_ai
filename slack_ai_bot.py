@@ -1,7 +1,7 @@
-import fastapi
 import uvicorn
 import requests
-from fastapi import Request, Form, BackgroundTasks
+import fastapi
+from fastapi import Request, Form, BackgroundTasks, Response
 from bs4 import BeautifulSoup
 import re
 import os
@@ -27,11 +27,9 @@ import sys
 import codecs
 import yaml
 import dataclasses
-
-# Set stdout and stderr to handle unicode properly on Windows
-if sys.platform == 'win32':
-    sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer)
-    sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer)
+from collections import defaultdict
+from dotenv import load_dotenv
+import traceback
 
 # Configure logging
 logging.basicConfig(
@@ -64,11 +62,20 @@ SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 LINEAR_API_KEY = os.environ.get("LINEAR_API_KEY", "")
 AI_RATE_LIMIT = int(os.environ.get("AI_RATE_LIMIT", "30"))  # Requests per minute
-AI_MODEL = os.environ.get("AI_MODEL", "o1-mini")
+AI_MODEL = os.environ.get("AI_MODEL", "o3-mini")
 
 # Initialize Slack client
 slack_client = WebClient(token=SLACK_BOT_TOKEN)
 logger.info("Slack client initialized")
+
+# Initialize Slack client with user token for thread history access
+SLACK_USER_TOKEN = os.environ.get("SLACK_USER_TOKEN", "")
+if SLACK_USER_TOKEN:
+    slack_user_client = WebClient(token=SLACK_USER_TOKEN)
+    logger.info("Slack user client initialized")
+else:
+    slack_user_client = None
+    logger.warning("No Slack user token provided - thread history access may be limited")
 
 # Initialize additional clients
 github_client = None
@@ -84,11 +91,28 @@ if LINEAR_API_KEY:
     except Exception as e:
         logger.error(f"Failed to initialize Linear client: {str(e)}")
 
+# Load prompts from YAML file
+try:
+    with open('prompts.yaml', 'r', encoding='utf-8') as file:
+        PROMPTS = yaml.safe_load(file)
+    logger.info("Successfully loaded prompts from prompts.yaml")
+except Exception as e:
+    logger.error(f"Error loading prompts: {str(e)}")
+    # Fallback to empty dict
+    PROMPTS = {}
+
 # Rate limiting tracker
 rate_limit_tracker = {
     "last_reset": time.time(),
     "requests": 0
 }
+
+# Conversation memory store - keys are channel_id+thread_ts, values are lists of messages
+conversation_history = defaultdict(list)
+# Maximum number of messages to keep in conversation history
+MAX_HISTORY_MESSAGES = 30
+# Maximum age of conversation history (in hours)
+CONVERSATION_EXPIRY = 24  # hours
 
 app = fastapi.FastAPI()
 
@@ -101,79 +125,846 @@ class ProcessedContent(BaseModel):
     thread_tweets: Optional[List[dict]] = None
 
 class AIRequest(BaseModel):
-    text: str
-    user_id: str
-    channel_id: str
-    response_url: str
-    files: Optional[List[Dict[str, Any]]] = None
-    urls: Optional[List[str]] = None
-    message_ts: Optional[str] = None
+    """Model for AI request data received from Slack."""
+    text: str  # The text of the request
+    user_id: str  # Slack user ID
+    channel_id: str  # Slack channel ID
+    files: Optional[List[Dict[str, Any]]] = None  # Attached files
+    urls: Optional[List[str]] = None  # URLs extracted from text
+    message_ts: Optional[str] = None  # Message timestamp for reference
 
 @dataclasses.dataclass
 class ContentAnalysisResult:
     """Result of content analysis, with categorization and extracted entities."""
-    content_type: str = ""  # Main content type
-    requires_history: bool = False  # Whether we need channel history
-    channel_query_description: str = ""  # Description for channel-based query
-    urls: List[str] = None  # General URLs
-    linear_issue: Optional[str] = None  # Linear issue ID if present
-    github_repo: Optional[str] = None  # GitHub repo if present
-    twitter_urls: List[str] = None  # Twitter URLs if present
-    linear_working_hours_query: bool = False  # Flag for working hours query
-    linear_query: bool = False  # Flag for general Linear query
+    content_type: str = ""  # Main content type: simple_prompt or prompt_requires_tool_use
+    requires_slack_channel_history: bool = False  # Whether we need channel history
+    urls: List[str] = None  # URLs mentioned in the query
+    perform_RAG_on_linear_issues: bool = False  # Whether to perform RAG on Linear issues
+    create_linear_issue: bool = False  # Whether to create a new Linear issue
     text: str = ""  # Original query text
 
+    def __post_init__(self):
+        if self.urls is None:
+            self.urls = []
+
+def format_for_slack(text: str) -> str:
+    """
+    Convert standard markdown formatting to Slack-compatible mrkdwn formatting.
+    
+    Args:
+        text: Text with potential markdown formatting
+        
+    Returns:
+        Text with Slack-compatible formatting
+    """
+    if not text:
+        return text
+        
+    # Replace double asterisks with single (for bold)
+    text = re.sub(r'\*\*([^*]+)\*\*', r'*\1*', text)
+    
+    # Replace double underscores with single (for italic)
+    text = re.sub(r'__([^_]+)__', r'_\1_', text)
+    
+    # Replace markdown headers with bold text
+    text = re.sub(r'^#{1,6}\s+(.+)$', r'*\1*', text, flags=re.MULTILINE)
+    
+    # Replace triple backticks with single backticks for inline code
+    text = re.sub(r'```([^`]+)```', r'`\1`', text)
+    
+    # Fix numbered lists (ensure there's a space after the period)
+    text = re.sub(r'^(\d+)\.([^\s])', r'\1. \2', text, flags=re.MULTILINE)
+    
+    # Fix bullet points (ensure there's a space after the asterisk)
+    text = re.sub(r'^\*([^\s])', r'* \1', text, flags=re.MULTILINE)
+    
+    # Remove language specifiers from code blocks
+    text = re.sub(r'```[a-zA-Z0-9]+\n', r'```\n', text)
+    
+    return text
+
 @app.post("/slack/ai_command")
-async def ai_command(request: Request, background_tasks: BackgroundTasks):
+def ai_command(request: Request):
+    return {"message": "AI command received"}
+#holding for now
+
+@app.post("/slack/events")
+async def slack_events(request: Request, background_tasks: BackgroundTasks):
     """
-    Entry point for Slack slash commands.
-    Uses the Slack Web API to better manage messages.
+    Handle Slack events, particularly app_mention events when the bot is tagged.
+    This endpoint processes mentions and responds similarly to the slash command.
     """
+    # Get the raw request body first
+    body = await request.body()
+    text_body = body.decode('utf-8')
+    logger.info(f"Received raw body: {text_body[:200]}...")  # Log first 200 chars
+    
     try:
-        # Parse the form data from Slack
-        form_data = await request.form()
-        logger.info(f"Received form data: {form_data.keys()}")
+        # Parse the JSON manually
+        payload = json.loads(text_body)
+        logger.info(f"Parsed payload type: {payload.get('type', 'unknown')}")
         
-        # Extract the necessary fields from form data
-        text = form_data.get("text", "")
-        user_id = form_data.get("user_id", "")
-        channel_id = form_data.get("channel_id", "")
-        response_url = form_data.get("response_url", "")
+        # Handle URL verification challenge by returning the raw challenge value
+        if payload.get("type") == "url_verification":
+            challenge = payload.get("challenge")
+            logger.info(f"Verification challenge received: {challenge}")
+            
+            # Return the raw challenge value directly as plain text
+            return Response(content=challenge, media_type="text/plain")
         
-        logger.info(f"Processing AI request: {text[:50]}...")
+        # Normal event processing continues...
+        if payload.get("type") == "event_callback":
+            event = payload.get("event", {})
+            event_type = event.get("type")
+            
+            # Handle bot mentions
+            if event_type == "app_mention":
+                logger.info(f"Bot was mentioned in channel {event.get('channel')}")
+                
+                # Extract user ID, channel ID, and text
+                user_id = event.get("user", "")
+                channel_id = event.get("channel", "")
+                text = event.get("text", "")
+                message_ts = event.get("ts", "")
+                
+                # Determine if this is a thread reply and get the thread_ts
+                # If thread_ts exists, this is a reply in a thread
+                # If not, this is a new thread where the current ts becomes the thread_ts
+                thread_ts = event.get("thread_ts", message_ts)
+                logger.info(f"Message ts: {message_ts}, Thread ts: {thread_ts}")
+                
+                # Remove the bot mention from the text (matches <@BOTID>)
+                text = text.replace(f"<@U08GNQ8F2RH>", "")
+                
+                if not text:
+                    # If there's no text after removing the mention, respond with a help message
+                    try:
+                        slack_client.chat_postMessage(
+                            channel=channel_id,
+                            text="Hello! I'm your AI assistant. How can I help you?",
+                            thread_ts=thread_ts
+                        )
+                    except SlackApiError as e:
+                        logger.error(f"Error sending help message: {e.response['error']}")
+                    return {}
+                
+                # Create AI request object
+                ai_request = AIRequest(
+                    text=text,
+                    user_id=user_id,
+                    channel_id=channel_id,
+                    urls=extract_urls(text),
+                    message_ts=message_ts
+                )
+                
+                # Send initial "processing" message
+                try:
+                    initial_response = slack_client.chat_postMessage(
+                        channel=channel_id,
+                        text="AI is processing...",
+                        thread_ts=thread_ts,
+                        blocks=[
+                            {
+                                "type": "section",
+                                "text": {
+                                    "type": "mrkdwn",
+                                    "text": f"*Input:*\n```\n{text[:50]}{('...' if len(text) > 50 else '')}\n```\n*Status:*\n```\n➤ Analyzing your query...\n```"
+                                },
+                                "accessory": {
+                                    "type": "image",
+                                    "image_url": "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExanRpdDc0enVuOXc3dG9vYWEzOGUyajFkOG03OHB6aTM4aTZhd2kycSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/IUNycHoVqvLDowiiam/giphy.gif",
+                                    "alt_text": "Processing"
+                                }
+                            },
+                            {
+                                "type": "context",
+                                "elements": [
+                                    {
+                                        "type": "mrkdwn",
+                                        "text": "_Please wait while I generate a response..._"
+                                    }
+                                ]
+                            }
+                        ]
+                    )
+                    logger.info(f"Posted initial message with ts: {initial_response.get('ts')}")
+                    
+                    # Update the AI request with the message timestamp for reference
+                    ai_request.message_ts = initial_response.get("ts")
+                    
+                except SlackApiError as e:
+                    logger.error(f"Error posting initial message: {e.response['error']}")
+                
+                # Start processing in the background
+                background_tasks.add_task(process_mention_request, ai_request, thread_ts)
+                
+        # Return an empty 200 response to acknowledge receipt
+        return {}
         
-        # Check for files
-        files = []
-        if "files" in form_data:
-            try:
-                files_json = json.loads(form_data["files"])
-                files = files_json if isinstance(files_json, list) else []
-            except:
-                logger.error("Failed to parse files JSON")
+    except Exception as e:
+        logger.error(f"Error processing Slack event: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+def extract_urls(text: str) -> List[str]:
+    """Extract URLs from text."""
+    if not text:
+        return []
         
-        # Create AI request object
-        ai_request = AIRequest(
-            text=text,
-            user_id=user_id,
-            channel_id=channel_id,
-            response_url=response_url,
-            files=files,
-            urls=extract_urls(text)
-        )
+    # Debug
+    logger.info(f"Extracting URLs from: {text[:100]}...")
+    
+    # Regex pattern for URLs
+    url_pattern = r'https?://[^\s<>"\']+'
+    urls = re.findall(url_pattern, text)
+    
+    logger.info(f"Extracted {len(urls)} URLs: {urls}")
+    return urls
+
+async def fetch_url_content(url: str) -> Dict[str, Any]:
+    """
+    Unified function to fetch content from a URL, determining the appropriate method based on URL type.
+    Tries GitHub, Twitter/X, and general web content in sequence.
+    
+    Args:
+        url: The URL to fetch content from
         
-        # Send initial message and get the timestamp
+    Returns:
+        Dictionary with the content and metadata
+    """
+    logger.info(f"Fetching content from URL: {url}")
+    
+    # Initialize result structure
+    result = {
+        "url": url,
+        "content_type": "unknown",
+        "text": "",
+        "title": "",
+        "metadata": {},
+        "error": None
+    }
+    
+    try:
+        # Check for GitHub repository URL
+        github_pattern = r'github\.com/([^/\s]+/[^/\s]+)'
+        github_match = re.search(github_pattern, url)
+        
+        if github_match:
+            # Extract repo owner and name, removing any trailing content
+            repo_path = github_match.group(1)
+            repo_path = re.sub(r'/(blob|tree|pull|issues).*$', '', repo_path)
+            
+            result["content_type"] = "github"
+            result["metadata"]["repo_path"] = repo_path
+            
+            # Try to fetch GitHub repo content
+            if github_client:
+                try:
+                    logger.info(f"Fetching GitHub repository: {repo_path}")
+                    repo = github_client.get_repo(repo_path)
+        
+                    # Get basic repo information
+                    result["title"] = repo.full_name
+                    result["text"] = repo.description or "No description available"
+                    result["metadata"].update({
+                        "stars": repo.stargazers_count,
+                        "forks": repo.forks_count,
+                        "language": repo.language,
+                        "owner": repo.owner.login,
+                        "created_at": repo.created_at.isoformat() if repo.created_at else None,
+                        "updated_at": repo.updated_at.isoformat() if repo.updated_at else None
+                    })
+        
+                    # Try to get README content
+                    try:
+                        readme = repo.get_readme()
+                        readme_content = base64.b64decode(readme.content).decode('utf-8')
+                        result["text"] += f"\n\nREADME:\n{readme_content}"
+                    except Exception as readme_error:
+                        logger.warning(f"Could not fetch README for {repo_path}: {str(readme_error)}")
+        
+                    return result
+                except Exception as e:
+                    logger.error(f"Error fetching GitHub repository: {str(e)}")
+                    result["error"] = f"GitHub API error: {str(e)}"
+            else:
+                result["error"] = "GitHub client not initialized"
+        
+        # Check for Twitter/X URL
+        twitter_pattern = r'(https?://(twitter\.com|x\.com)/[^\s]+)'
+        twitter_match = re.search(twitter_pattern, url)
+        
+        if twitter_match:
+            result["content_type"] = "twitter"
+            
+            # Try to fetch Twitter content
+            if TWITTER_API_KEY and TWITTER_API_SECRET and TWITTER_BEARER_TOKEN:
+                try:
+                    # This will use your existing Twitter processing function
+                    processed_content = process_tweet_url(url)
+                    
+                    if processed_content:
+                        result["text"] = processed_content.text_content
+                        result["title"] = f"Tweet from @{processed_content.user_id}" if processed_content.user_id else "Tweet"
+                        result["metadata"].update({
+                            "tweet_id": processed_content.tweet_id,
+                            "user_id": processed_content.user_id,
+                            "is_thread": processed_content.thread_tweets is not None,
+                            "thread_tweets": processed_content.thread_tweets
+                        })
+                        
+                        return result
+                except Exception as e:
+                    logger.error(f"Error fetching Twitter content: {str(e)}")
+                    result["error"] = f"Twitter API error: {str(e)}"
+                    # Continue to try as a regular URL
+            else:
+                result["error"] = "Twitter API credentials not configured"
+    
+        # If we're here, try to fetch as a general web URL
+        result["content_type"] = "web"
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as response:
+                if response.status == 200:
+                    html = await response.text()
+                    soup = BeautifulSoup(html, 'html.parser')
+                    
+                    # Get the page title
+                    title_tag = soup.find("title")
+                    if title_tag:
+                        result["title"] = title_tag.get_text(strip=True)
+                    
+                    # Remove scripts, styles, etc.
+                    for element in soup(["script", "style", "footer", "nav"]):
+                        element.extract()
+                    
+                    # Get meta description if available
+                    meta_desc = soup.find("meta", attrs={"name": "description"})
+                    if meta_desc:
+                        result["metadata"]["description"] = meta_desc.get("content", "")
+                    
+                    # Try to get main content
+                    main_content = soup.find("main") or soup.find("article") or soup.find("div", class_="content")
+                    
+                    if main_content:
+                        # Get text from main content
+                        content_text = main_content.get_text(separator=' ', strip=True)
+                        content_text = re.sub(r'\s+', ' ', content_text)
+                        result["text"] = content_text[:5000]  # Limit to 5000 chars
+                    else:
+                        # Get text from body if main content not found
+                        body_text = soup.get_text(separator=' ', strip=True)
+                        body_text = re.sub(r'\s+', ' ', body_text)
+                        result["text"] = body_text[:5000]  # Limit to 5000 chars
+                else:
+                    result["error"] = f"HTTP error: {response.status}"
+                    
+        return result
+                    
+    except Exception as e:
+        logger.error(f"Error in process_mention_request: {str(e)}")
+        # Send error as a new message in the thread
         try:
-            # Post initial "processing" message and capture its timestamp
-            initial_response = slack_client.chat_postEphemeral(
-                channel=channel_id,
-                user=user_id,
-                text="AI is processing...",
+            slack_client.chat_postMessage(
+                channel=ai_request.channel_id,
+                thread_ts=ai_request.message_ts,
+                text=f"Sorry, I encountered an error: {str(e)}"
+            )
+        except Exception as post_error:
+            logger.error(f"Error sending error message: {str(post_error)}")
+
+
+def parse_user_mentions(text):
+    """
+    Convert Slack user mentions (<@U123ABC>) to their actual display names.
+    Returns both the original text and a display-name version.
+    """
+    # Find all user mentions (<@U123ABC>)
+    mention_pattern = r'<@([A-Z0-9]+)>'
+    mentions = re.findall(mention_pattern, text)
+    
+    # Replace each mention with actual username
+    for user_id in mentions:
+        try:
+            user_info = slack_client.users_info(user=user_id)
+            if user_info["ok"]:
+                # Get user information in order of preference
+                display_name = (
+                    user_info["user"]["profile"].get("display_name") or
+                    f"<@{user_id}>"  # Fallback to original mention if no name found
+                )
+                
+                # Also get title if available
+                title = user_info["user"]["profile"].get("title", "")
+                
+                # Replace the mention with the display name
+                text = text.replace(f"<@{user_id}>", display_name)
+                
+                # Log the successful conversion
+                logger.info(f"Converted user mention {user_id} to {display_name}")
+                
+        except SlackApiError as e:
+            logger.error(f"Error getting user info for {user_id}: {str(e)}")
+            # Keep the original mention format if we can't get user info
+            continue
+    
+    return text
+
+async def process_mention_request(ai_request: AIRequest, thread_ts: str):
+    try:
+        logger.info(f"Processing mention request from user {ai_request.user_id}: {ai_request.text[:50]}...")
+
+        # Check rate limits
+        if not check_rate_limit():
+            try:
+                slack_client.chat_postMessage(
+                    channel=ai_request.channel_id,
+                    thread_ts=thread_ts,
+                    text="Rate limit exceeded. Please try again in a minute."
+                )
+            except Exception as e:
+                logger.error(f"Error sending rate limit message: {str(e)}")
+            return
+        
+        # Use the thread_ts parameter as our root thread identifier
+        # This is passed from the slack_events function and is the thread's root ts
+        root_thread_ts = thread_ts
+        
+        # Extract thread_ts from the message text if available
+        # Sometimes messages contain thread_ts in their metadata
+        if hasattr(ai_request, 'metadata') and ai_request.metadata and 'thread_ts' in ai_request.metadata:
+            root_thread_ts = ai_request.metadata['thread_ts']
+            logger.info(f"Found thread_ts in message metadata: {root_thread_ts}")
+        
+        # Define conversation key using the root thread_ts
+        conversation_key = f"{ai_request.channel_id}:{root_thread_ts}"
+        logger.info(f"Using conversation key: {conversation_key}")
+        
+        # Clean expired conversations periodically
+        clean_expired_conversations()
+        
+        # Parse user mentions if exists
+        ai_request.text = parse_user_mentions(ai_request.text)
+        
+        # Initialize context parts for the final response
+        context_parts = []
+
+        #initialize history context
+        history_context = []
+
+        #init sender's name
+        sender_name = slack_client.users_info(user=ai_request.user_id)
+        if sender_name["ok"]:
+            sender_name = sender_name["user"]["profile"]["display_name"]
+        else:
+            sender_name = f"<@{ai_request.user_id}>"
+        
+        # Add current query
+        context_parts.append(f"Current {sender_name} query: {ai_request.text}\n")
+        
+        # Add conversation history if it exists
+        if conversation_key in conversation_history and conversation_history[conversation_key]:
+            history_context = ["**Here is the conversation history between you and " + sender_name + " so far:**"]
+            for i, msg in enumerate(conversation_history[conversation_key]):
+                # Add message number for better context
+                if msg["role"] == "user":
+                    history_context.append(f"**{sender_name} (#{i+1} turn):** {msg['content']}")
+                else:
+                    # Truncate assistant responses in history to keep context manageable
+                    content = msg["content"]
+                    if len(content) > 300:
+                        content = content[:300] + "... (content truncated)"
+                    history_context.append(f"**Assistant (#{i+1} turn):** {content}")
+            
+            context_parts.append("\n".join(history_context))
+            context_parts.append("")  # Empty line after history
+        else:
+            history_context = ["**Conversation History:** This is the first message in the conversation between you and " + sender_name + "."]
+        
+        # Step 1: Analyze the content to determine what we need to do
+        try:
+            content_analysis = await analyze_content(ai_request.text, "\n".join(history_context), sender_name=sender_name)
+            logger.info(f"Content analysis: {content_analysis}")
+        except Exception as e:
+            error_msg = f"Error analyzing content: {str(e)}"
+            logger.error(error_msg)
+            context_parts.append(f"\n❌ {error_msg}")
+            # Set default content analysis
+            content_analysis = ContentAnalysisResult()
+            content_analysis.content_type = "simple_prompt"
+        
+        # Try to rebuild conversation history from thread if needed
+        if root_thread_ts and (conversation_key not in conversation_history or not conversation_history[conversation_key]):
+            try:
+                # Use slack_user_client to get thread history if available
+                if slack_user_client:
+                    # Log the thread_ts we're using to fetch replies
+                    logger.info(f"Fetching thread messages using root ts: {root_thread_ts}")
+                    thread_info = slack_user_client.conversations_replies(
+                        channel=ai_request.channel_id,
+                        ts=root_thread_ts,  # This is the root message of the thread
+                        limit=MAX_HISTORY_MESSAGES  # Reasonable limit
+                    )
+                    # Safely log the response data, not the SlackResponse object itself
+                    if thread_info and thread_info.get("ok"):
+                        logger.info(f"Raw conversations_replies response: messages count: {len(thread_info.get('messages', []))}, has_more: {thread_info.get('has_more', False)}")
+                    else:
+                        logger.info(f"Raw conversations_replies response error: {thread_info.get('error', 'unknown error')}")
+                else:
+                    # Fallback to bot client (which may not work for channels)
+                    logger.info(f"Using bot client to fetch thread with ts: {root_thread_ts}")
+                    thread_info = slack_client.conversations_replies(
+                        channel=ai_request.channel_id,
+                        ts=root_thread_ts,
+                        limit=MAX_HISTORY_MESSAGES
+                    )
+                    # Safely log the response data, not the SlackResponse object itself
+                    if thread_info and thread_info.get("ok"):
+                        logger.info(f"Raw conversations_replies response (bot client): messages count: {len(thread_info.get('messages', []))}, has_more: {thread_info.get('has_more', False)}")
+                    else:
+                        logger.info(f"Raw conversations_replies response error (bot client): {thread_info.get('error', 'unknown error')}")
+                
+                if thread_info and "messages" in thread_info:
+                    logger.info(f"Found {len(thread_info['messages'])} messages in thread")
+                    
+                    # Initialize or clear the conversation history for this thread
+                    conversation_history[conversation_key] = []
+                    
+                    # Process all messages in the thread in chronological order
+                    for msg in thread_info["messages"]:
+                        # Skip the current message being processed
+                        if msg.get('ts') == ai_request.message_ts:
+                            logger.info(f"Skipping current message being processed: {msg.get('text', '')[:30]}...")
+                            continue
+                        
+                        # Skip processing messages
+                        if "AI is processing" in msg.get("text", "") or "Generating response" in msg.get("text", "") or "⌛ Generating response" in msg.get("text", ""):
+                            logger.info(f"Skipping processing message: {msg.get('text', '')[:30]}...")
+                            continue
+                        
+                        # Determine if this is a bot message
+                        is_bot = msg.get("bot_id") is not None
+                        
+                        # Add to conversation history with appropriate role
+                        conversation_history[conversation_key].append({
+                            "role": "assistant" if is_bot else "user",
+                            "content": msg.get("text", ""),
+                            "timestamp": float(msg.get("ts", time.time()))
+                        })
+                        # logger.info(f"Added {'assistant' if is_bot else 'user'} message to history: {msg.get('text', '')[:30]}...")
+                    
+                    logger.info(f"Rebuilt conversation history with {len(conversation_history[conversation_key])} messages")
+                else:
+                    logger.info(f"No messages found in thread. Response: {thread_info}")
+            except Exception as e:
+                logger.error(f"Error getting thread info: {str(e)}")
+                # Print full traceback for debugging
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+        
+        # Step 2: Process the request based on content analysis
+        
+        # If we need to search Slack channel history
+        if content_analysis.requires_slack_channel_history:
+            try:
+                # Update message to show slack search stage
+                try:
+                    slack_client.chat_update(
+                        channel=ai_request.channel_id,
+                        text="",
+                        ts=ai_request.message_ts,
+                        blocks=[
+                            {
+                                "type": "section",
+                                "text": {
+                                    "type": "mrkdwn",
+                                    "text": f"*Input:*\n```\n{ai_request.text[:50]}{('...' if len(ai_request.text) > 50 else '')}\n```\n*Status:*\n```\n✓ Query analyzed\n➤ Searching Slack history...\n```"
+                                },
+                                "accessory": {
+                                    "type": "image",
+                                    "image_url": "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExanRpdDc0enVuOXc3dG9vYWEzOGUyajFkOG03OHB6aTM4aTZhd2kycSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/IUNycHoVqvLDowiiam/giphy.gif",
+                                    "alt_text": "Processing"
+                                }
+                            }
+                        ]
+                    )
+                except SlackApiError as e:
+                    error_msg = f"Could not update processing message: {e.response.get('error', '')}"
+                    logger.warning(error_msg)
+                    context_parts.append(f"\n⚠️ {error_msg}")
+                
+                logger.info("Searching Slack channel history")
+                
+                # Search channel history with AI-enhanced parameters
+                search_results = await search_channel_history(ai_request.channel_id, search_params, ai_request.text, history_context=history_context)
+                
+                if search_results.get("error"):
+                    error_msg = f"Error searching Slack history: {search_results['error']}"
+                    logger.error(error_msg)
+                    context_parts.append(f"\n❌ {error_msg}")
+                elif search_results["count"] > 0:
+                    # Include search parameters used in the context
+                    ai_search_params = search_results.get("search_params", {})
+                    search_context = []
+                    
+                    if ai_search_params.get("username"):
+                        username = ai_search_params['username']
+                        search_context.append(f"User: @{username}")
+                    
+                    time_range = f"{ai_search_params.get('time_value', 7)} {ai_search_params.get('time_range', 'days')}"
+                    search_context.append(f"Time range: {time_range}")
+                    search_context.append(f"Message limit: {ai_search_params.get('message_count', 50)}")
+                    
+                    context_parts.append(f"\nFound {search_results['count']} messages in channel history.")
+                    
+                    # Format relevant messages for context with user information
+                    relevant_messages = []
+                    for msg in search_results['messages']:
+                        try:
+                            # Try to get user information for better display
+                            user_id = msg.get('user', '')
+                            try:
+                                user_info = slack_client.users_info(user=user_id)
+                                user_name = user_info['user'].get('real_name', user_id)
+                            except:
+                                user_name = f"<@{user_id}>"
+                                
+                            relevant_messages.append(f"Message from {user_name}: {msg['text']}")
+                            
+                            # Include information about other content types
+                            content_types = msg.get("content_types", [])
+                            if "image" in content_types:
+                                relevant_messages.append(f"- Contains {len(msg.get('images', []))} images")
+                            if "url" in content_types:
+                                relevant_messages.append(f"- Contains URLs: {', '.join(msg.get('urls', [])[:3])}")
+                            if "code" in content_types:
+                                relevant_messages.append(f"- Contains code blocks")
+                        except Exception as msg_error:
+                            error_msg = f"Error processing message: {str(msg_error)}"
+                            logger.warning(error_msg)
+                            relevant_messages.append(f"⚠️ {error_msg}")
+                    
+                    context_parts.append("Relevant channel messages:\n" + "\n".join(relevant_messages))
+                else:
+                    context_parts.append("\nNo relevant messages found in channel history.")
+                    if "search_params" in search_results:
+                        time_range = f"{search_results.get('search_params', {}).get('time_value', 7)} {search_results.get('search_params', {}).get('time_range', 'days')}"
+                        context_parts.append(f"Searched the last {time_range}.")
+            except Exception as e:
+                error_msg = f"Error searching Slack channel history: {str(e)}"
+                logger.error(error_msg)
+                context_parts.append(f"\n❌ {error_msg}")
+        
+        # If we need to perform RAG on Linear issues
+        if content_analysis.perform_RAG_on_linear_issues:
+            try:
+                # Update message to show linear search stage
+                try:
+                    linear_stage_text = "*Status:*\n```\n✓ Query analyzed\n"
+                    if content_analysis.requires_slack_channel_history:
+                        linear_stage_text += "✓ Slack history searched\n"
+                    linear_stage_text += "➤ Searching Linear issues...\n```"
+                    
+                    slack_client.chat_update(
+                        channel=ai_request.channel_id,
+                        text="",
+                        ts=ai_request.message_ts,
+                        blocks=[
+                            {
+                                "type": "section",
+                                "text": {
+                                    "type": "mrkdwn",
+                                    "text": f"*Input:*\n```\n{ai_request.text[:50]}{('...' if len(ai_request.text) > 50 else '')}\n```\n{linear_stage_text}"
+                                },
+                                "accessory": {
+                                    "type": "image",
+                                    "image_url": "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExanRpdDc0enVuOXc3dG9vYWEzOGUyajFkOG03OHB6aTM4aTZhd2kycSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/IUNycHoVqvLDowiiam/giphy.gif",
+                                    "alt_text": "Processing"
+                                }
+                            }
+                        ]
+                    )
+                except SlackApiError as e:
+                    error_msg = f"Could not update processing message: {e.response.get('error', '')}"
+                    logger.warning(error_msg)
+                    context_parts.append(f"\n⚠️ {error_msg}")
+                
+                logger.info("Performing RAG search on Linear issues")
+                
+                # Call with the user's query and a reasonable limit
+                linear_results = await perform_linear_rag_search(ai_request.text, limit=15, history_context=history_context, sender_name=sender_name)
+                
+                # Format and add Linear results to context
+                linear_context = format_linear_search_results(linear_results)
+                context_parts.extend(linear_context)
+                
+            except Exception as e:
+                error_msg = f"Error performing Linear RAG search: {str(e)}"
+                logger.error(error_msg)
+                context_parts.append(f"\n❌ {error_msg}")
+        
+        # Process URLs if present
+        if content_analysis.urls:
+            logger.info(f"Processing {len(content_analysis.urls)} URLs")
+            
+            url_results = []
+            url_errors = []
+            for url in content_analysis.urls:
+                try:
+                    result = await fetch_url_content(url)
+                    url_results.append(result)
+                    if result.get("error"):
+                        url_errors.append(f"Error processing {url}: {result['error']}")
+                except Exception as e:
+                    error_msg = f"Error processing {url}: {str(e)}"
+                    logger.error(error_msg)
+                    url_errors.append(error_msg)
+            
+            if url_results:
+                context_parts.append("\nURL content:")
+                
+                # Add any errors first
+                if url_errors:
+                    context_parts.append("\n❌ URL Processing Errors:")
+                    for error in url_errors:
+                        context_parts.append(f"- {error}")
+                    context_parts.append("")  # Empty line after errors
+
+                for result in url_results:
+                    context_parts.append(f"\nURL: {result['url']}")
+                    context_parts.append(f"Type: {result['content_type']}")
+                    
+                    if result.get("error"):
+                        context_parts.append(f"Error: {result['error']}")
+                    elif result.get("title"):
+                        context_parts.append(f"Title: {result['title']}")
+                        
+                        # Add metadata based on content type
+                        if result["content_type"] == "github":
+                            if "metadata" in result and "stars" in result["metadata"]:
+                                context_parts.append(f"Stars: {result['metadata']['stars']}")
+                                context_parts.append(f"Language: {result['metadata'].get('language', 'Unknown')}")
+                        
+                        # Add text content (limited to keep context reasonable)
+                        if result.get("text"):
+                            text = result["text"]
+                            if len(text) > 1000:
+                                text = text[:1000] + "... (content truncated)"
+                            context_parts.append(f"Content: {text}")
+
+        # if content_analysis.create_linear_issue == False:
+        #     content_analysis.create_linear_issue = True
+        if content_analysis.create_linear_issue == False:
+            # Check if the query contains keywords that suggest creating a Linear issue
+            issue_creation_keywords = [
+                "create issue", "create a issue", "create an issue", 
+                "make issue", "make a issue", "make an issue",
+                "new issue", "add issue", "add a issue", "add an issue",
+                "create task", "create a task", "new task"
+            ]
+            
+            # Convert to lowercase for case-insensitive matching
+            text_lower = content_analysis.text.lower()
+            
+            # Check if any of the keywords are in the text
+            if any(keyword in text_lower for keyword in issue_creation_keywords):
+                content_analysis.create_linear_issue = True
+                print(f"Manually overriding create_linear_issue to True based on keyword detection")
+
+        if content_analysis.create_linear_issue:
+            try:
+                create_issue_text = "*Status:*\n```\n✓ Query analyzed\n"
+                create_issue_text += "➤Crafting your Linear issue...\n```"
+                try:
+                    slack_client.chat_update(
+                        channel=ai_request.channel_id,
+                        text="",
+                        ts=ai_request.message_ts,
+                        blocks=[
+                            {
+                                "type": "section",
+                                "text": {
+                                    "type": "mrkdwn",
+                                    "text": f"*Input:*\n```\n{ai_request.text[:50]}{('...' if len(ai_request.text) > 50 else '')}\n```\n{create_issue_text}"
+                                },
+                                "accessory": {
+                                    "type": "image",
+                                    "image_url": "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExanRpdDc0enVuOXc3dG9vYWEzOGUyajFkOG03OHB6aTM4aTZhd2kycSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/IUNycHoVqvLDowiiam/giphy.gif",
+                                    "alt_text": "Processing"
+                                }
+                            }
+                        ]
+                    )
+                except SlackApiError as e:
+                    error_msg = f"Could not update processing message: {e.response.get('error', '')}"
+                    logger.warning(error_msg)
+                    context_parts.append(f"\n⚠️ {error_msg}")
+                    
+                # Generate issue parameters using AI
+                result = await generate_linear_issue(ai_request.text, history_context, sender_name)
+                
+                if result is None:
+                    error_msg = "Failed to generate Linear issue - no response from API"
+                    logger.error(error_msg)
+                    context_parts.append(f"\n❌ {error_msg}")
+                elif isinstance(result, str) and "Error message:" in result:
+                    error_msg = result.replace("Error message: ", "")
+                    logger.error(f"Linear issue creation error: {error_msg}")
+                    context_parts.append(f"\n❌ Error creating Linear issue: {error_msg}")
+                elif result.get("success"):
+                    issue_info = result.get("issue", {})
+                    success_msg = [
+                        f"\n✅ Successfully created Linear issue:",
+                        f"Title: {issue_info.get('title', 'No title')}",
+                        f"URL: {issue_info.get('url', 'No URL')}",
+                    ]
+                    if issue_info.get('assignee'):
+                        success_msg.append(f"Assigned to: {issue_info['assignee']}")
+                    if issue_info.get('team'):
+                        success_msg.append(f"Team: {issue_info['team']}")
+                    if issue_info.get('priority'):
+                        success_msg.append(f"Priority: {issue_info['priority']}")
+                    
+                    context_parts.extend(success_msg)
+                else:
+                    error_msg = result.get('error', 'Unknown error occurred')
+                    logger.error(f"Linear issue creation failed: {error_msg}")
+                    context_parts.append(f"\n❌ Error creating Linear issue: {error_msg}")
+                
+            except Exception as e:
+                error_msg = f"Error in Linear issue creation process: {str(e)}"
+                logger.error(error_msg)
+                context_parts.append(f"\n❌ {error_msg}")
+                result = {"success": False, "error": str(e)}  # Set default result for error case
+        
+        # Update message to show final response generation stage
+        try:
+            response_stage_text = "*Status:*\n```\n✓ Query analyzed\n"
+            if content_analysis.requires_slack_channel_history:
+                response_stage_text += "✓ Slack history searched\n"
+            if content_analysis.perform_RAG_on_linear_issues:
+                response_stage_text += "✓ Linear issues searched\n"
+            if content_analysis.create_linear_issue:
+                if result.get("success"):
+                    response_stage_text += f"✓ Linear issue created\n"
+                    response_stage_text += f"Title: {result['issue']['title']}\n"
+                    response_stage_text += f"URL: {result['issue']['url']}\n"
+                    if result['issue'].get('assignee'):
+                        response_stage_text += f"Assigned to: {result['issue']['assignee']}\n"
+                else:
+                    response_stage_text += f"❌ Error creating Linear issue: {result.get('error', 'Unknown error')}\n"
+            response_stage_text += "➤ Generating response...\n```"
+            
+            slack_client.chat_update(
+                channel=ai_request.channel_id,
+                text="",
+                ts=ai_request.message_ts,
                 blocks=[
                     {
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f"*Input:*\n```\n{text[:50]}{('...' if len(text) > 50 else '')}\n```\n*Status:*\nProcessing..."
+                            "text": f"*Input:*\n```\n{ai_request.text[:50]}{('...' if len(ai_request.text) > 50 else '')}\n```\n{response_stage_text}"
                         },
                         "accessory": {
                             "type": "image",
@@ -192,231 +983,63 @@ async def ai_command(request: Request, background_tasks: BackgroundTasks):
                     }
                 ]
             )
-            logger.info(f"Posted initial message with ts: {initial_response.get('message_ts')}")
-            
-            # Include the message timestamp in the AI request for later reference
-            ai_request.message_ts = initial_response.get("message_ts")
-            
         except SlackApiError as e:
-            logger.error(f"Error posting initial message: {e.response['error']}")
+            logger.warning(f"Could not update processing message: {e.response.get('error', '')}")
         
-        # Start processing in the background
-        background_tasks.add_task(process_ai_request, ai_request)
+        # Step 3: Call AI with the full context including conversation history
+        logger.info("Building final context for AI call with conversation history")
+        full_context = "\n".join(context_parts)
+        logger.info(f"Full context: {full_context}")
         
-        # Return an empty 200 response since we already sent the message
-        return {}
+        # Add the current user message to conversation history before generating the response
+        conversation_history[conversation_key].append({
+            "role": "user",
+            "content": ai_request.text,
+            "timestamp": time.time()
+        })
+        
+        # Get the message with streaming for a better user experience
+        message_ts = await stream_ai_response(full_context, ai_request, thread_ts, sender_name=sender_name)
+        
+        # If we got a valid response, log the conversation history
+        if message_ts:
+            # Note: Both the user message and bot response are already stored in the conversation history
+            
+            # Log conversation history for debugging
+            logger.info(f"Updated conversation history for {conversation_key}, " + 
+                       f"now contains {len(conversation_history[conversation_key]) - 1} messages")
+            
+            # Limit to last MAX_HISTORY_MESSAGES messages
+            warning_message = f"⚠️ *Notice:* The conversation history has exceeded {MAX_HISTORY_MESSAGES} messages. To maintain optimal performance, I'll reset my memory here, please provide full information about what you want to ask. Previous messages will be forgotten."
+            if len(conversation_history[conversation_key]) > MAX_HISTORY_MESSAGES and warning_message not in conversation_history[conversation_key]:
+                # Send warning message about history reset only if it's not already in the history
+                try:
+                    slack_client.chat_postMessage(
+                        channel=ai_request.channel_id,
+                        thread_ts=thread_ts,
+                        text=warning_message
+                    )
+                except SlackApiError as e:
+                    logger.warning(f"Could not send history reset warning: {e.response.get('error', '')}")
+                conversation_history[conversation_key] = conversation_history[conversation_key][-MAX_HISTORY_MESSAGES:]
+                logger.info(f"Trimmed conversation history to {MAX_HISTORY_MESSAGES} messages")
         
     except Exception as e:
-        logger.error(f"Error processing request: {str(e)}")
-        if "channel_id" in locals() and "user_id" in locals():
-            try:
-                slack_client.chat_postEphemeral(
-                    channel=channel_id,
-                    user=user_id,
-                    text=f"Sorry, I encountered an error: {str(e)}"
-                )
-            except:
-                pass
-        return {"status": "error", "message": str(e)}
-
-async def process_ai_request(ai_request: AIRequest):
-    """Process an AI request with direct message handling using the Web API."""
-    try:
-        logger.info(f"Processing AI request from user {ai_request.user_id}: {ai_request.text[:50]}...")
-        
-        # Check rate limits
-        if not check_rate_limit():
-            await send_slack_response(
-                ai_request.response_url,
-                "Rate limit exceeded. Please try again in a minute.",
-                error=True,
-                replace_original=True  # Replace the loading message
-            )
-            return
-        
-        # Analyze the content to determine what we're looking for
-        content_analysis = await analyze_content(ai_request.text)
-        logger.info(f"Content analysis: {content_analysis}")
-        
-        # Determine search parameters based on the content analysis
-        search_params = await evaluate_search_parameters(ai_request.text, content_analysis)
-        logger.info(f"Search parameters: {search_params}")
-        
-        # Get relevant messages from channel history if needed
-        search_results = []
-        if content_analysis.requires_history:
-            search_results = await search_channel_history(ai_request.channel_id, search_params)
-            logger.info(f"Retrieved {len(search_results)} messages from history")
-        
-        # Determine which content sources we need to fetch
-        required_sources = await determine_required_content_sources(
-            ai_request.text, 
-            search_results, 
-            content_analysis
-        )
-        logger.info(f"Required content sources: {required_sources}")
-        
-        # Evaluate the search results to identify the most relevant content
-        evaluation_result = None
-        if search_results:
-            evaluation_result = await evaluate_search_results(
-                ai_request.text,
-                search_results,
-                content_analysis
-            )
-            logger.info(f"Evaluation result contains {len(evaluation_result.get('relevant_messages', []))} relevant messages")
-        
-        # Check for recent images if the query is image-related
-        recent_images = None
-        if detect_image_related_query(ai_request.text):
-            recent_messages = await get_recent_messages(ai_request.channel_id)
-            recent_images = extract_images_from_messages(recent_messages)
-            logger.info(f"Retrieved {len(recent_images)} recent images")
-        
-        # Selectively fetch only the content we need
-        content = await fetch_content_selectively(
-            ai_request.text,
-            required_sources,
-            content_analysis,
-            ai_request.channel_id
-        )
-        logger.info("Content fetched selectively")
-        
-        # Build the final context for AI processing
-        context, image_urls = await build_response_context(
-            ai_request.text,
-            content,
-            search_results,
-            evaluation_result,
-            recent_images
-        )
-        logger.info(f"Built context with length: {len(context)}")
-        
-        # Call AI with the built context
-        response_text = await call_ai(context, image_urls)
-        logger.info(f"Received AI response with length: {len(response_text)}")
-        
-        # Send a new message with the AI response and delete the old one
+        logger.error(f"Error in process_mention_request: {str(e)}")
+        # Send error as a new message in the thread
         try:
-            # Post new message with AI response
             slack_client.chat_postMessage(
                 channel=ai_request.channel_id,
-                text=response_text,
-                blocks=[
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": response_text,
-                            "verbatim": True
-                        }
-                    }
-                ]
-            )
-            logger.info("Posted AI response as new message")
-            
-            # Delete the ephemeral processing message if possible
-            if hasattr(ai_request, 'message_ts') and ai_request.message_ts:
-                try:
-                    slack_client.chat_delete(
-                        channel=ai_request.channel_id,
-                        ts=ai_request.message_ts
-                    )
-                    logger.info(f"Deleted processing message with ts: {ai_request.message_ts}")
-                except SlackApiError as e:
-                    # This may fail for ephemeral messages, which is okay
-                    logger.warning(f"Could not delete processing message: {e.response['error']}")
-            
-        except SlackApiError as e:
-            logger.error(f"Error sending AI response: {e.response['error']}")
-            # Fall back to response_url if Web API fails
-            await send_slack_response(
-                ai_request.response_url,
-                response_text
-            )
-        
-    except Exception as e:
-        logger.error(f"Error in process_ai_request: {str(e)}")
-        
-        # Send error as a new message
-        try:
-            slack_client.chat_postEphemeral(
-                channel=ai_request.channel_id,
-                user=ai_request.user_id,
+                thread_ts=thread_ts,
                 text=f"Sorry, I encountered an error: {str(e)}"
+            )
+            slack_client.chat_delete(
+                channel=ai_request.channel_id,
+                ts=ai_request.message_ts
             )
         except Exception as post_error:
             logger.error(f"Error sending error message: {str(post_error)}")
-            # Fall back to response_url
-            await send_slack_response(
-                ai_request.response_url,
-                f"Sorry, I encountered an error: {str(e)}",
-                error=True
-            )
-
-async def send_slack_response(response_url: str, text: str, error: bool = False, replace_original: bool = True, channel_id: str = None, is_ephemeral: bool = False):
-    """Send a response back to Slack with improved error handling for used URLs."""
-    logger.info(f"Sending response to Slack: {text[:50]}...")
-    
-    try:
-        headers = {"Content-Type": "application/json"}
-        
-        # Prepare blocks for better formatting
-        blocks = [
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": text,
-                    "verbatim": True  # Add this to prevent Slack from auto-formatting
-                }
-            }
-        ]
-        
-        # Add error styling if needed
-        if error:
-            blocks.append({
-                "type": "context",
-                "elements": [
-                    {
-                        "type": "mrkdwn",
-                        "text": "⚠️ _This response contains an error_"
-                    }
-                ]
-            })
-        
-        # Send the response
-        payload = {
-            "text": text,  # Fallback text
-            "blocks": blocks,
-            "response_type": "in_channel" if not is_ephemeral else "ephemeral",
-            "replace_original": replace_original,
-            "delete_original": False  # Don't delete the original - just replace it
-        }
-        
-        # Use aiohttp for async request
-        async with aiohttp.ClientSession() as session:
-            async with session.post(response_url, json=payload, headers=headers) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    logger.error(f"Error sending Slack response: {response.status} - {error_text}")
-                    
-                    # If we get a used_url error, try to send a message directly to the channel instead
-                    if "used_url" in error_text and channel_id:
-                        try:
-                            # Fall back to posting directly to the channel
-                            slack_client.chat_postMessage(
-                                channel=channel_id,
-                                text=text,
-                                blocks=blocks
-                            )
-                            logger.info("Successfully sent message directly to channel after used_url error")
-                        except Exception as e:
-                            logger.error(f"Failed to send fallback message: {str(e)}")
-                else:
-                    logger.info("Successfully sent response to Slack")
-    except Exception as e:
-        logger.error(f"Exception sending Slack response: {str(e)}")
+        return
 
 def check_rate_limit():
     """Check if the request is within rate limits."""
@@ -439,13 +1062,36 @@ def check_rate_limit():
     rate_limit_tracker["requests"] += 1
     return True
 
-async def analyze_content(text: str) -> ContentAnalysisResult:
+def clean_expired_conversations():
+    """Remove expired conversations from memory"""
+    current_time = time.time()
+    expiry_seconds = CONVERSATION_EXPIRY * 3600  # Convert hours to seconds
+    
+    keys_to_remove = []
+    for key, messages in conversation_history.items():
+        if not messages:
+            keys_to_remove.append(key)
+            continue
+            
+        # Check if the last message is older than the expiry time
+        last_msg = messages[-1]
+        if current_time - last_msg.get("timestamp", 0) > expiry_seconds:
+            keys_to_remove.append(key)
+    
+    # Remove expired conversations
+    for key in keys_to_remove:
+        del conversation_history[key]
+    
+    if keys_to_remove:
+        logger.info(f"Cleaned {len(keys_to_remove)} expired conversations")
+
+async def analyze_content(text: str, history_context: List[str], sender_name: str) -> ContentAnalysisResult:
     """
     Analyze the content of a message to determine its type and extract relevant information.
     
     Args:
         text: The text of the message
-        
+        history_context: The conversation history between the user and the assistant
     Returns:
         ContentAnalysisResult object with analysis results
     """
@@ -456,216 +1102,145 @@ async def analyze_content(text: str) -> ContentAnalysisResult:
     result.text = text  # Store the original text
     
     # Extract URLs from the text
-    urls = extract_urls(text)
-    result.urls = urls if urls else None
+    if "https://" in text or "t.me/" in text:
+        urls = extract_urls(text)
+        result.urls = urls if urls else []
     
-    # Set placeholder for twitter URLs
-    result.twitter_urls = []
     
-    # Extract specific content patterns first
-    
-    # Extract Linear issue ID if present
-    linear_issue_match = re.search(r'\b([A-Z]+-\d+)\b', text)
-    if linear_issue_match:
-        result.linear_issue = linear_issue_match.group(1)
-        logger.info(f"Extracted Linear issue ID: {result.linear_issue}")
-        result.content_type = "linear_issue"
-        return result  # Return early if we found a Linear issue
-    
-    # Extract GitHub repo if present in text or URLs
-    github_repo = None
-    github_pattern = r'github\.com/([^/\s]+/[^/\s]+)'
-    
-    # First check in the text
-    github_match = re.search(github_pattern, text)
-    if github_match:
-        github_repo = github_match.group(1)
-        result.github_repo = github_repo
-        result.content_type = "github"
-        logger.info(f"Extracted GitHub repo from text: {github_repo}")
-        return result  # Return early if we found a GitHub repo
-    
-    # If not found in text, check in URLs
-    if not github_repo and urls:
-        for url in urls:
-            github_match = re.search(github_pattern, url)
-            if github_match:
-                github_repo = github_match.group(1)
-                # Remove any trailing parts like /blob, /tree, etc.
-                github_repo = re.sub(r'/(blob|tree|pull|issues).*$', '', github_repo)
-                result.github_repo = github_repo
-                result.content_type = "github"
-                logger.info(f"Extracted GitHub repo from URL: {github_repo}")
-                return result  # Return early if we found a GitHub repo
-    
-    # Check for Twitter URLs
-    twitter_urls = []
-    twitter_pattern = r'(https?://(twitter\.com|x\.com)/[^\s]+)'
-    
-    # First check in the text
-    for match in re.finditer(twitter_pattern, text):
-        twitter_url = match.group(1)
-        twitter_urls.append(twitter_url)
-        result.content_type = "twitter"
-        logger.info(f"Extracted Twitter URL from text: {twitter_url}")
-    
-    # Then check in the extracted URLs
-    if not twitter_urls and urls:
-        for url in urls:
-            if re.match(twitter_pattern, url):
-                twitter_urls.append(url)
-                result.content_type = "twitter"
-                logger.info(f"Extracted Twitter URL: {url}")
-    
-    if twitter_urls:
-        result.twitter_urls = twitter_urls
-        return result  # Return early if we found Twitter URLs
-    
-    # If we have URLs but no specific pattern matched, set as url_content
-    if not result.content_type and urls:
-        result.content_type = "url_content"
-        logger.info("Setting content type to URL content")
-        return result  # Return early if we have URLs
-    
-    # For all other content, use AI classification with our improved prompts
+    # Use AI classification with our prompt from YAML
     try:
         # Get the prompt templates from YAML
         system_prompt = PROMPTS.get("analyze_content", {}).get("system", "")
         user_prompt_template = PROMPTS.get("analyze_content", {}).get("user_template", "")
-        
-        # Format the user prompt
+    
+        # Format the user prompt with properly joined history context
+        # history_text = "\n".join(history_context) if history_context else "No previous conversation"
         user_prompt = user_prompt_template.format(
             text=text,
-            urls=urls if urls else []
+            conversation_history=history_context,
+            sender_name=sender_name
         )
-        
+
         # Call OpenAI
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            response_format={"type": "json_object"}
-        )
+        if AI_MODEL.startswith("gpt"):
+            response = client.chat.completions.create(
+                model=AI_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                response_format={"type": "json_object"}
+            )
+        elif AI_MODEL.startswith("o"):
+            prompt = system_prompt + "\n\n" + user_prompt
+            logger.info(f"User prompt at analyze_content: {prompt}")
+            response = client.chat.completions.create(
+                model=AI_MODEL,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
         
         # Parse the response
         analysis = json.loads(response.choices[0].message.content)
-        logger.info(f"AI content analysis: {analysis}")
         
         # Update the result with the AI analysis
-        result.content_type = analysis.get("content_type", "simple_query")  # Default to simple_query if not specified
-        result.requires_history = analysis.get("requires_history", False)
-        result.channel_query_description = analysis.get("channel_query_description", "")
+        result.content_type = analysis.get("content_type", "simple_prompt")
+        result.requires_slack_channel_history = analysis.get("requires_slack_channel_history", False)
+        result.perform_RAG_on_linear_issues = analysis.get("perform_RAG_on_linear_issues", False)
         
-        # Update additional fields if provided
-        if "linear_issue" in analysis and analysis["linear_issue"]:
-            result.linear_issue = analysis["linear_issue"]
+        # If URLs were identified in the analysis, update our list
+        if "urls" in analysis and analysis["urls"]:
+            result.urls = analysis["urls"]
         
-        if "github_repo" in analysis and analysis["github_repo"]:
-            result.github_repo = analysis["github_repo"]
-        
-        if "linear_working_hours_query" in analysis:
-            result.linear_working_hours_query = analysis["linear_working_hours_query"]
-        
-        if "linear_query" in analysis:
-            result.linear_query = analysis["linear_query"]
-        
-        # Update content type based on specific flags
-        if result.linear_query and result.content_type != "linear_issue":
-            result.content_type = "linear_data"
-        
-        if result.linear_working_hours_query:
-            result.content_type = "linear_working_hours"
-
-        
-        #manually checking if the query is linear related
-        if_linear = False
-        if_linear = check_if_linear_query(text)
-        if if_linear:
-            result.linear_query = True
-        
-        logger.info(f"AI determined content type: {result.content_type}, requires_history: {result.requires_history}")
+        logger.info(f"AI determined content type: {result.content_type}, requires_channel_history: {result.requires_slack_channel_history}, perform_RAG: {result.perform_RAG_on_linear_issues}, create_linear_issue: {result.create_linear_issue}")
         return result
         
     except Exception as e:
         logger.error(f"Error in AI content analysis: {str(e)}")
-        # Fallback to simple_query for any error
-        result.content_type = "simple_query"
-        result.requires_history = False
-        logger.info("Falling back to simple_query type due to error")
+        # Fallback to simple_prompt for any error
+        result.content_type = "simple_prompt"
+        result.requires_slack_channel_history = False
+        result.perform_RAG_on_linear_issues = False
+        logger.info("Falling back to simple_prompt type due to error")
         return result
 
-async def check_if_linear_query(text: str) -> bool:
+async def search_channel_history(channel_id: str, search_params: Dict[str, Any], query: str = None, history_context: List[str] = []):
     """
-    Check if the query is likely related to Linear project management data.
+    Search channel history with AI-enhanced parameters for relevance.
+    Uses AI to determine optimal search parameters based on the query.
+    Identifies different types of content: text, URLs, images, videos, code blocks, files.
     
-    Parameters:
-    - text: The text to analyze
+    Args:
+        channel_id: Slack channel ID
+        search_params: Initial search parameters (may be overridden by AI)
+        query: The user's original query text
     
     Returns:
-    - True if the query is likely about Linear, False otherwise
+        List of processed messages with content type information
     """
-    logger.info(f"Checking if query is Linear-related: {text}")
-    
-    # Check for obvious Linear keywords
-    linear_keywords = [
-        "linear", "project", "issue", "task", "cycle", "sprint", "roadmap",
-        "team", "milestone", "assignee", "priority", "estimate", "points",
-        "backlog", "ticket", "track", "progress", "status", "todo", "in progress",
-        "done", "complete", "blocked", "timeline", "due date", "deadline",
-        "working hours", "time tracking", "logged time", "work item"
-    ]
-    
-    # Check for any of the keywords in the text
-    text_lower = text.lower()
-    if any(keyword in text_lower for keyword in linear_keywords):
-        logger.info("Text contains Linear keywords")
-        return True
-    
-    # For less obvious cases, ask AI if this is a Linear-related query
-    system_prompt = """
-    You are an expert at determining if a query is related to project management in Linear.
-    You'll receive a user query and should determine if it's asking about:
-    - Team information in Linear
-    - Sprint/cycle planning or status
-    - Issues, tasks, or work items
-    - User assignments or workload
-    - Project timelines or roadmaps
-    - Project or team progress
-    - Working hours or time tracking
-    - Any other Linear project management data
-    
-    Answer with ONLY "yes" or "no" - is this query asking about Linear project management data?
-    """
-    
-    user_prompt = f"Is this query related to Linear project management data? Query: '{text}'"
-    
-    try:
-        # Call OpenAI to determine if this is a Linear query
-        response = await call_openai(system_prompt, user_prompt)
-        
-        # Check if the response indicates this is a Linear query
-        if response and response.lower().strip() in ["yes", "true", "y"]:
-            logger.info("AI determined this is a Linear query")
-            return True
-        else:
-            logger.info("AI determined this is NOT a Linear query")
-            return False
+    # If a query is provided, use AI to determine search parameters
+    if query:
+        try:
+            logger.info(f"Using AI to determine search parameters for query: {query}")
             
-    except Exception as e:
-        logger.error(f"Error determining if query is Linear-related: {str(e)}")
+            # Get the prompt templates from YAML
+            system_prompt = PROMPTS.get("slack_search_operator", {}).get("system", "")
+            user_prompt_template = PROMPTS.get("slack_search_operator", {}).get("user_template", "")
         
-        # Fall back to keyword matching if AI call fails
-        return any(keyword in text_lower for keyword in linear_keywords)
+            if system_prompt and user_prompt_template:
+                # Format the user prompt
+                user_prompt = user_prompt_template.format(
+                    text=query,
+                    history_context="\n".join(history_context)
+                )
 
-async def search_channel_history(channel_id: str, search_params: Dict[str, Any]):
-    """
-    Search channel history with enhanced parameters for relevance.
-    Now includes better handling of recently posted images and files.
-    """
-    logger.info(f"Searching channel history with custom parameters: {search_params}")
+
+                logger.info(f"User prompt at slack_search_operator: {user_prompt}")
+        
+                # Call OpenAI to analyze the query
+                client = openai.OpenAI(api_key=OPENAI_API_KEY)
+                if AI_MODEL.startswith("gpt"):   
+                    response = client.chat.completions.create(
+                        model=AI_MODEL,
+                        messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                        ],
+                        response_format={"type": "json_object"}
+                    )
+                elif AI_MODEL.startswith("o"):
+                    prompt = system_prompt + "\n\n" + user_prompt
+                    response = client.chat.completions.create(
+                        model=AI_MODEL,
+                        messages=[
+                            {"role": "user", "content": prompt}
+                        ]
+                    )
+        
+                # Parse the response
+                ai_params = json.loads(response.choices[0].message.content)
+                logger.info(f"AI determined search parameters: {ai_params}")
+                
+                # Update search parameters with AI-determined values
+                if "username" in ai_params and ai_params["username"]:
+                    search_params["username"] = ai_params["username"]
+                if "time_range" in ai_params:
+                    search_params["time_range"] = ai_params["time_range"]
+                if "time_value" in ai_params:
+                    search_params["time_value"] = ai_params["time_value"]
+                if "message_count" in ai_params:
+                    search_params["message_count"] = ai_params["message_count"]
+                    
+                logger.info(f"Using AI-determined parameters: {search_params}")
+        except Exception as e:
+            logger.error(f"Error in AI-determined search parameters: {str(e)}")
+            # Continue with default parameters
+    else:
+        logger.warning("No query provided, using default search parameters")
+    
+    logger.info(f"Searching channel history with parameters: {search_params}")
     
     # Define time range in seconds based on the parameters
     now = datetime.datetime.now().timestamp()
@@ -688,17 +1263,24 @@ async def search_channel_history(channel_id: str, search_params: Dict[str, Any])
         # Maximum number of messages to fetch
         max_messages = search_params.get("message_count", 50)
         
-        # Fetch recent history first - this ensures we get the most recent messages including images
-        result = slack_client.conversations_history(
-            channel=channel_id,
-            limit=20,  # Start with most recent 20 messages to catch newly posted images
-            inclusive=True
-        )
+        # Prepare conversation history params
+        history_params = {
+            "channel": channel_id,
+            "limit": min(100, max_messages),
+            "oldest": oldest_ts,
+            "inclusive": True
+        }
+        
+        # If username is specified, we'll filter later in Python
+        username_filter = search_params.get("username")
+        
+        # Fetch channel history
+        result = slack_client.conversations_history(**history_params)
         
         messages = result["messages"]
         
         # If we need more messages and there are more to fetch
-        if max_messages > 20 and result.get("has_more", False):
+        if max_messages > 100 and result.get("has_more", False):
             # Continue fetching older messages
             cursor = result["response_metadata"]["next_cursor"]
             while len(messages) < max_messages and cursor:
@@ -714,1160 +1296,1141 @@ async def search_channel_history(channel_id: str, search_params: Dict[str, Any])
                 else:
                     break
         
-        # Enhanced processing of messages - especially focused on images
+        # Apply username filter if specified
+        if username_filter:
+            logger.info(f"Filtering messages by username: {username_filter}")
+            
+            # Filter messages directly by user information
+            filtered_messages = []
+            
+            # Get all users first to compare usernames
+            try:
+                users_response = slack_client.users_list()
+                users = users_response.get("members", [])
+                
+                # Find users that match the username filter
+                matching_user_ids = []
+                for user in users:
+                    name = user.get("name", "").lower()
+                    real_name = user.get("real_name", "").lower()
+                    display_name = user.get("profile", {}).get("display_name", "").lower()
+                    
+                    # Check for matches in all name fields
+                    if (username_filter.lower() == name or 
+                        username_filter.lower() == real_name or
+                        username_filter.lower() in name or
+                        username_filter.lower() in real_name or
+                        username_filter.lower() in display_name):
+                        matching_user_ids.append(user.get("id"))
+                
+                logger.info(f"Found {len(matching_user_ids)} users matching '{username_filter}'")
+                
+                # Filter messages by those user IDs
+                for msg in messages:
+                    user_id = msg.get("user", "")
+                    if user_id in matching_user_ids:
+                        filtered_messages.append(msg)
+                
+                messages = filtered_messages
+                logger.info(f"Found {len(messages)} messages from users matching '{username_filter}'")
+            
+            except Exception as e:
+                logger.error(f"Error filtering messages by username: {str(e)}")
+                # Fall back to basic filtering if user lookup fails
+                filtered_messages = []
+                for msg in messages:
+                    if msg.get("user"):
+                        filtered_messages.append(msg)
+                messages = filtered_messages
+                logger.warning(f"Fell back to basic filtering, found {len(messages)} messages")
+        
+        # Process messages to identify content types
         processed_messages = []
         for msg in messages:
-            # Check for images in files
-            has_files = False
-            has_images = False
+            processed_msg = {
+                "ts": msg.get("ts", ""),
+                "user": msg.get("user", ""),
+                "text": msg.get("text", ""),
+                "content_types": [],
+                "urls": [],
+                "images": [],
+                "videos": [],
+                "files": [],
+                "code_blocks": [],
+                "reactions": msg.get("reactions", [])
+            }
             
+            # Check for basic text
+            if msg.get("text"):
+                processed_msg["content_types"].append("text")
+            
+            # Extract URLs from text
+            if msg.get("text"):
+                urls = extract_urls(msg.get("text", ""))
+                if urls:
+                    processed_msg["content_types"].append("url")
+                    processed_msg["urls"] = urls
+            
+            # Check for files
             if "files" in msg:
-                has_files = True
+                processed_msg["content_types"].append("file")
+                
                 for file in msg["files"]:
-                    if file.get("mimetype", "").startswith("image/"):
-                        has_images = True
-                        # Add image-specific metadata to make it easier to find
-                        file["is_image"] = True
-                        
-            # Add these flags to make filtering easier
-            msg["has_files"] = has_files
-            msg["has_images"] = has_images
+                    file_info = {
+                        "id": file.get("id", ""),
+                        "name": file.get("name", ""),
+                        "title": file.get("title", ""),
+                        "mimetype": file.get("mimetype", ""),
+                        "filetype": file.get("filetype", ""),
+                        "url": file.get("url_private", ""),
+                        "thumb_url": file.get("thumb_url", ""),
+                        "size": file.get("size", 0),
+                        "created": file.get("created", 0)
+                    }
+                    
+                    # Add file to the processed message files list
+                    processed_msg["files"].append(file_info)
+                    
+                    # Determine the content type based on mimetype
+                    mimetype = file.get("mimetype", "")
+                    if mimetype.startswith("image/"):
+                        if "image" not in processed_msg["content_types"]:
+                            processed_msg["content_types"].append("image")
+                        processed_msg["images"].append(file_info)
+                    elif mimetype.startswith("video/"):
+                        if "video" not in processed_msg["content_types"]:
+                            processed_msg["content_types"].append("video")
+                        processed_msg["videos"].append(file_info)
+                    elif mimetype.startswith("text/") or "code" in file.get("filetype", ""):
+                        if "code" not in processed_msg["content_types"]:
+                            processed_msg["content_types"].append("code")
             
-            # Also mark messages that have URLs or code blocks
-            msg["has_urls"] = "http://" in msg.get("text", "") or "https://" in msg.get("text", "")
-            msg["has_code"] = "```" in msg.get("text", "")
+            # Check for code blocks in text
+            if msg.get("text") and "```" in msg.get("text", ""):
+                processed_msg["content_types"].append("code")
+                
+                # Extract code blocks
+                code_blocks = re.findall(r'```(?:\w+)?\n(.*?)```', msg.get("text", ""), re.DOTALL)
+                if code_blocks:
+                    processed_msg["code_blocks"] = code_blocks
             
-            processed_messages.append(msg)
+            # Check for attachments
+            if "attachments" in msg:
+                for attachment in msg["attachments"]:
+                    # Check for image attachments
+                    if attachment.get("image_url"):
+                        if "image" not in processed_msg["content_types"]:
+                            processed_msg["content_types"].append("image")
+                        processed_msg["images"].append({
+                            "url": attachment.get("image_url", ""),
+                            "thumb_url": attachment.get("thumb_url", ""),
+                            "title": attachment.get("title", "Attachment")
+                        })
+            
+            # Check for thread information
+            if "thread_ts" in msg:
+                processed_msg["thread_ts"] = msg["thread_ts"]
+                processed_msg["content_types"].append("thread")
+            
+            # Add the processed message to our list
+            processed_messages.append(processed_msg)
         
-        logger.info(f"Found {len(processed_messages)} relevant messages in channel history")
+        logger.info(f"Found {len(processed_messages)} messages with content breakdown: " + 
+                   f"text: {sum(1 for m in processed_messages if 'text' in m['content_types'])}, " +
+                   f"urls: {sum(1 for m in processed_messages if 'url' in m['content_types'])}, " +
+                   f"images: {sum(1 for m in processed_messages if 'image' in m['content_types'])}, " +
+                   f"videos: {sum(1 for m in processed_messages if 'video' in m['content_types'])}, " +
+                   f"code: {sum(1 for m in processed_messages if 'code' in m['content_types'])}")
         
-        # If we're specifically looking for images, make sure those are prioritized
-        if search_params.get("resource_types") and "images" in search_params.get("resource_types"):
-            # Move messages with images to the front of the list
-            image_messages = [msg for msg in processed_messages if msg.get("has_images")]
-            non_image_messages = [msg for msg in processed_messages if not msg.get("has_images")]
-            processed_messages = image_messages + non_image_messages
-            logger.info(f"Prioritized {len(image_messages)} messages with images")
-            
-        return processed_messages
+        # Return search parameters along with results
+        return {
+            "messages": processed_messages,
+            "search_params": search_params,
+            "count": len(processed_messages)
+        }
         
     except SlackApiError as e:
         logger.error(f"Error searching channel history: {e.response['error']}")
-        return []
-
-def extract_urls(text: str) -> List[str]:
-    """Extract URLs from text."""
-    if not text:
-        return []
-        
-    # Debug
-    logger.info(f"Extracting URLs from: {text[:100]}...")
-    
-    # Regex pattern for URLs
-    url_pattern = r'https?://[^\s<>"\']+'
-    urls = re.findall(url_pattern, text)
-    
-    logger.info(f"Extracted {len(urls)} URLs: {urls}")
-    return urls
-
-async def fetch_content_selectively(query: str, required_sources: Dict[str, bool], content_analysis: ContentAnalysisResult, channel_id: str = None, timestamp: str = None, thread_ts: str = None, slack_client=None):
-    """Fetch content from required sources in parallel."""
-    logger.info(f"Fetching content from required sources: {required_sources}")
-    
-    content = {}
-    
-    # Prepare tasks based on required sources
-    tasks = []
-    
-    # Linear issue - FIXED: Check for both 'linear' and 'linear_issue' in required_sources
-    if (required_sources.get("linear_issue", False) or required_sources.get("linear", False)) and content_analysis.linear_issue:
-        logger.info(f"Adding task to fetch Linear issue: {content_analysis.linear_issue}")
-        tasks.append(("linear_issue", fetch_linear_issue(content_analysis.linear_issue)))
-    
-    # Linear working hours
-    if required_sources.get("linear_working_hours", False):
-        logger.info("Fetching Linear working hours data")
-        # If we have a specific team mentioned in the query, fetch for that team
-        team_id = None
-        
-        # TODO: Extract team name from query if possible
-        
-        tasks.append(("linear_working_hours", fetch_team_working_hours(team_id)))
-    
-    # # General Linear query using the new query planner
-    # if required_sources.get("linear_query", False):
-    #     logger.info("Fetching general Linear data using query planner")
-    #     tasks.append(("linear_data", process_linear_query(query)))
-    
-    # GitHub repo
-    if required_sources.get("github_repo", False) and content_analysis.github_repo:
-        tasks.append(("github_repo", fetch_github_repo(content_analysis.github_repo)))
-    
-    # URL content
-    if required_sources.get("url_content", False) and content_analysis.urls:
-        for url in content_analysis.urls:
-            tasks.append((f"url_{url}", fetch_url_content(url)))
-    
-    # Twitter content
-    if required_sources.get("twitter", False) and content_analysis.twitter_urls:
-        for url in content_analysis.twitter_urls:
-            tasks.append((f"twitter_{url}", fetch_twitter_content(url)))
-    
-    # Channel info (for channel-specific queries)
-    if required_sources.get("channel_info", False) and channel_id:
-        tasks.append(("channel_info", get_channel_info(channel_id)))
-    
-    # Execute all tasks in parallel
-    results = await asyncio.gather(*[task[1] for task in tasks], return_exceptions=True)
-    
-    # Process results
-    for i, (key, _) in enumerate(tasks):
-        result = results[i]
-        if isinstance(result, Exception):
-            logger.error(f"Error fetching {key}: {str(result)}")
-            content[key] = {"error": str(result)}
-        else:
-            logger.info(f"Successfully fetched {key}")
-            
-            # Special handling for Twitter URLs to ensure they're added with the right key
-            if key.startswith("twitter_"):
-                url = key[len("twitter_"):]
-                content[f"twitter_{url}"] = result
-            # Special handling for regular URLs to ensure they're added with the right key
-            elif key.startswith("url_"):
-                url = key[len("url_"):]
-                content[f"url_{url}"] = result
-            else:
-                content[key] = result
-    
-    logger.info(f"Content fetched from {len(content)} sources")
-    return content
-
-async def fetch_url_content(url: str):
-    """Fetch content from a general URL."""
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                if response.status == 200:
-                    html = await response.text()
-                    soup = BeautifulSoup(html, 'html.parser')
-                    
-                    # Remove scripts, styles, etc.
-                    for element in soup(["script", "style", "footer", "nav"]):
-                        element.extract()
-                    
-                    # Get text
-                    text = soup.get_text(separator=' ', strip=True)
-                    
-                    # Simple text cleaning
-                    text = re.sub(r'\s+', ' ', text)
-                    
-                    return text[:5000]  # Limit to 5000 chars
-                else:
-                    return f"Error fetching URL: HTTP {response.status}"
-    except Exception as e:
-        return f"Error fetching URL: {str(e)}"
-
-async def fetch_github_repo(repo_url: str):
-    """Fetch GitHub repository information."""
-    if not github_client:
-        logger.error("GitHub client not initialized")
-        return {"error": "GitHub API access not configured"}
-    
-    try:
-        # Extract repo owner and name from URL
-        parsed_url = urlparse(repo_url)
-        path_parts = parsed_url.path.strip('/').split('/')
-        
-        if len(path_parts) < 2:
-            return {"error": "Invalid GitHub repository URL format"}
-        
-        owner, repo_name = path_parts[0], path_parts[1]
-        
-        logger.info(f"Fetching GitHub repository: {owner}/{repo_name}")
-        
-        # Try to fetch the repository
-        try:
-            repo = github_client.get_repo(f"{owner}/{repo_name}")
-        except Exception as repo_error:
-            logger.error(f"Error accessing GitHub repository {owner}/{repo_name}: {str(repo_error)}")
-            return {
-                "name": f"{owner}/{repo_name}",
-                "description": "⚠️ This repository couldn't be accessed. It may be private or not exist.",
-                "url": repo_url,
-                "error": str(repo_error)
-            }
-        
-        # Get basic repo information
-        repo_info = {
-            "name": repo.full_name,
-            "description": repo.description or "No description available",
-            "stars": repo.stargazers_count,
-            "forks": repo.forks_count,
-            "url": repo.html_url,
-            "language": repo.language
-        }
-        
-        # Try to get README content
-        try:
-            readme = repo.get_readme()
-            readme_content = base64.b64decode(readme.content).decode('utf-8')
-            repo_info["readme"] = readme_content
-        except Exception as readme_error:
-            logger.warning(f"Could not fetch README for {owner}/{repo_name}: {str(readme_error)}")
-            repo_info["readme"] = "README not available"
-        
-        return repo_info
-    
-    except Exception as e:
-        logger.error(f"Error fetching GitHub repository: {str(e)}")
         return {
-            "name": repo_url,
-            "description": f"Error fetching repository information: {str(e)}",
-            "url": repo_url,
-            "error": str(e)
+            "messages": [],
+            "search_params": search_params,
+            "count": 0,
+            "error": str(e.response['error'])
         }
 
-async def fetch_linear_issue(issue_id: str):
-    """Fetch details of a Linear issue by its ID."""
-    logger.info(f"Fetching Linear issue: {issue_id}")
-    
-    if not linear_client:
-        logger.error("Linear client not initialized")
-        return None
-        
-    try:
-        issue = linear_client.get_issue(issue_id)
-        if not issue:
-            logger.warning(f"Linear issue not found: {issue_id}")
-            return None
-            
-        issue_data = {
-            "id": issue.id,
-            "title": issue.title,
-            "description": issue.description,
-            "status": issue.state.get("name") if issue.state else "Unknown",
-            "assignee": issue.assignee.get("name") if issue.assignee else "Unassigned",
-            "labels": [label.get("name") for label in issue.labels] if hasattr(issue, "labels") and issue.labels else [],
-            "priority": getattr(issue, "priority", None),
-            "created_at": issue.created_at
-        }
-        
-        logger.info(f"Retrieved Linear issue: {issue.title}")
-        return issue_data
-        
-    except Exception as e:
-        logger.error(f"Error fetching Linear issue {issue_id}: {str(e)}")
-        return None
-
-async def fetch_team_working_hours(team_id: Optional[str] = None, required_hours: int = 40):
+async def perform_linear_rag_search(query: Optional[str] = None, limit: int = 10, history_context: List[str] = [], sender_name: str = "") -> Dict[str, Any]:
     """
-    Fetch working hours information for a specific team or all teams.
-    Can also identify users not meeting their required hours.
+    Perform RAG (Retrieval Augmented Generation) search on Linear issues.
+    Uses the linear_rag_search.py module to retrieve relevant issues.
+    If query is provided, first analyzes the query with AI to determine optimal search parameters.
+    Then performs search using these parameters if needed, or returns available company data directly.
     
-    Parameters:
-    - team_id: Optional team ID. If None, will fetch for all teams.
-    - required_hours: Number of required working hours (default: 40)
+    Args:
+        query: The search query (optional)
+        limit: Maximum number of results to return (required)
+        
+    Returns:
+        Dictionary with search results and metadata, or company information
     """
-    logger.info(f"Fetching team working hours. Team ID: {team_id if team_id else 'All teams'}")
-    
-    if not linear_client:
-        logger.error("Linear client not initialized")
-        return {
-            "error": "Linear client not initialized. Please check your API configuration."
-        }
+    logger.info(f"Performing Linear RAG search with query: {query if query else 'None'}")
     
     try:
-        # If we have a specific team ID, get data for just that team
-        if team_id:
-            team_data = linear_client.get_team_working_hours(team_id)
-            
-            # Find users not meeting hours
-            users_below_target = []
-            for member in team_data.get("members", []):
-                if member.get("total_hours", 0) < required_hours:
-                    users_below_target.append({
-                        "name": member.get("name", "Unknown"),
-                        "email": member.get("email", ""),
-                        "hours_logged": member.get("total_hours", 0),
-                        "missing_hours": member.get("missing_hours", 0),
-                        "team_id": team_id
-                    })
-            
-            return {
-                "team_data": team_data,
-                "users_below_target": users_below_target,
-                "week_start_date": team_data.get("week_start_date", ""),
-                "week_end_date": team_data.get("week_end_date", "")
-            }
-        else:
-            # Get all users not meeting required hours across all teams
-            users_below_target = linear_client.find_users_not_meeting_required_hours(required_hours)
-            
-            # Get summary of all teams
-            teams_summary = linear_client.get_all_teams_working_hours()
-            
-            return {
-                "users_below_target": users_below_target,
-                "teams_summary": teams_summary,
-                "required_hours": required_hours
-            }
-            
-    except Exception as e:
-        error_message = f"Error fetching working hours information: {str(e)}"
-        logger.error(error_message)
-        return {"error": error_message}
-
-async def fetch_twitter_content(url: str):
-    """Fetch content from a Twitter/X URL."""
-    # This will reuse your existing Twitter/X functionality
-    processed_content = process_tweet_url(url)
-    
-    # Extract just what we need
-    twitter_content = {
-        "tweet_id": processed_content.tweet_id,
-        "user_id": processed_content.user_id,
-        "text": processed_content.text_content,
-        "is_thread": processed_content.thread_tweets is not None,
-        "thread": processed_content.thread_tweets
-    }
-    
-    return twitter_content
-
-async def build_response_context(query: str, content: Dict[str, Any], channel_history: List[Dict[str, Any]], evaluation_result: Dict[str, Any] = None, recent_images: List[Dict[str, Any]] = None):
-    """Build the context for sending to the AI, based on the content sources that were fetched."""
-    logger.info("Building final response context")
-    
-    parts = []
-    image_urls = []
-    
-    # Format channel history if present
-    formatted_messages = []
-    if channel_history:
-        if evaluation_result and "relevant_message_indices" in evaluation_result:
-            relevant_indices = evaluation_result.get("relevant_message_indices", [])
-            relevant_messages = [channel_history[i] for i in relevant_indices if i < len(channel_history)]
-            
-            # Format the relevant messages
-            for message in relevant_messages:
-                user_info = message.get("user_profile", {})
-                username = user_info.get("real_name", "Unknown User")
-                text = message.get("text", "")
-                
-                # Add attachment info if available
-                attachments = message.get("attachments", [])
-                for attachment in attachments:
-                    if attachment.get("text"):
-                        text += f"\n[Attachment: {attachment.get('text')}]"
-                
-                formatted = f"{username}: {text}"
-                formatted_messages.append(formatted)
-            
-            if formatted_messages:
-                parts.append("Relevant channel history:")
-                parts.extend(formatted_messages)
-                parts.append("")  # Add blank line
-    
-    # Add Linear issue data if present
-    if "linear_issue" in content:
-        issue_data = content["linear_issue"]
-        parts.append("Linear Issue Information:")
+        # Import the linear_rag_search module
+        from linear_rag_search import search_issues, get_available_teams_and_cycles, advanced_search
         
-        if isinstance(issue_data, dict):
-            if "error" in issue_data:
-                parts.append(f"Error retrieving Linear issue: {issue_data['error']}")
-            else:
-                # Access dictionary keys instead of attributes
-                parts.append(f"Title: {issue_data.get('title', 'Unknown')}")
-                parts.append(f"ID: {issue_data.get('id', 'Unknown')}")
-                
-                if 'description' in issue_data:
-                    parts.append(f"Description: {issue_data['description']}")
-                
-                if 'status' in issue_data:
-                    parts.append(f"State: {issue_data['status']}")
-                elif 'state' in issue_data and isinstance(issue_data['state'], dict):
-                    parts.append(f"State: {issue_data['state'].get('name', 'Unknown')}")
-                
-                if 'assignee' in issue_data:
-                    if isinstance(issue_data['assignee'], dict):
-                        parts.append(f"Assignee: {issue_data['assignee'].get('name', 'Unassigned')}")
+        # Get available teams and cycles
+        available_data = get_available_teams_and_cycles()
+        teams = available_data.get("teams", [])
+        cycles = available_data.get("cycles", [])
+        
+        # Default filter to exclude titles containing 'call'
+        default_filter = {
+            "field": "title",
+            "operator": "NOT ILIKE",
+            "value": "%call%"
+        }
+        
+        # Use static list for Linear users - these are separate from Slack users
+        # This is the accurate list of Linear users with their correct names
+        linear_users = get_linear_names()
+        
+        # Define known issue states and priorities for the prompt
+        issue_states = ["Todo", "In Progress", "In Review", "Done", "Canceled"]
+        issue_priorities = [
+            "0 - No priority",
+            "1 - Urgent",
+            "2 - High",
+            "3 - Medium",
+            "4 - Low"
+        ]
+        
+        # Use AI to determine optimal search parameters only if query is provided
+        if query:
+            logger.info("Using AI to determine optimal search parameters")
+            system_prompt = PROMPTS.get("linear_search_operator", {}).get("system", "")
+            user_prompt_template = PROMPTS.get("linear_search_operator", {}).get("user_template", "")
+            
+            if system_prompt and user_prompt_template:
+                # Format the user prompt
+                user_prompt = user_prompt_template.format(
+                    text=query,
+                    teams=", ".join([f"{team['name']} ({team['key']})" for team in teams]),
+                    cycles=", ".join([cycle['name'] for cycle in cycles]),
+                    cycles_data="\n".join([f"{cycle['name']}: {cycle['issue_count']}" for cycle in cycles]),
+                    users=linear_users,
+                    states=", ".join(issue_states),
+                    priorities=", ".join(issue_priorities),
+                    history_context="\n".join(history_context),
+                    sender_name=sender_name
+                )
+
+                #use different model for linear search
+                AI_MODEL = "o3-mini"
+                # Call OpenAI to analyze the query
+                client = openai.OpenAI(api_key=OPENAI_API_KEY)
+                try:
+                    logger.info("About to call OpenAI API")
+                    if AI_MODEL.startswith("gpt"):
+                        response = client.chat.completions.create(
+                            model=AI_MODEL,  # Using smaller model for faster response
+                            messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                            ],
+                            response_format={"type": "json_object"}
+                        )
+                    elif AI_MODEL.startswith("o"):
+                        prompt = system_prompt + "\n\n" + user_prompt
+                        response = client.chat.completions.create(
+                            model=AI_MODEL,
+                            messages=[
+                                {"role": "user", "content": prompt}
+                            ]
+                        )
+                    logger.info("Successfully received OpenAI API response")
+                except Exception as e:
+                    logger.error(f"Error calling OpenAI: {e}")
+                    logger.error(f"Exception details: {traceback.format_exc()}")
+                    # Re-raise to be caught by outer try/except
+                    raise
+                # Parse the response
+                try:
+                    result = response.choices[0].message.content
+                    logger.info(f"Raw AI-determined search parameters: {result}")
+                    if result.startswith("```json"):
+                        result = result.strip("```json")
+                    elif result.startswith("```"):
+                        result = result.strip("```")
+                    result = result.strip()  # Remove any extra whitespace
+                    
+                    try:
+                        search_params = json.loads(result)
+                        
+                        # Add debug logging to see what's in the search params
+                        logger.info(f"Parsed search parameters: {json.dumps(search_params, indent=2)}")
+                        
+                    except json.JSONDecodeError as json_err:
+                        logger.error(f"Failed to parse AI response as JSON: {json_err}")
+                        logger.error(f"Raw response content: {result}")
+                        # Fall back to basic search
+                        return {
+                            "requires_linear_search": True,
+                            "results": search_issues(query=query, limit=limit),
+                            "available_teams": teams,
+                            "available_cycles": cycles,
+                            "search_parameters": {
+                                "team_key": None,
+                                "cycle_name": None,
+                                "assignee": None,
+                                "query": query,
+                                "limit": limit
+                            },
+                            "query": query,
+                            "error": f"Failed to parse AI search parameters: {str(json_err)}",
+                            "fallback": "Using basic search due to parsing error"
+                        }
+                    
+                    logger.info(f"AI determined search parameters: {search_params}")
+                    
+                    # Check if we're using the legacy format or the new advanced format
+                    if "requires_linear_search" in search_params:
+                        # Legacy format - convert to advanced format
+                        if not search_params.get("requires_linear_search", True):
+                            # If search is not required, return the company data directly
+                            logger.info("AI determined that Linear search is not needed, returning company data directly")
+                            return {
+                                "requires_linear_search": False,
+                                "results": [],
+                                "available_teams": teams,
+                                "available_cycles": cycles,
+                                "search_parameters": {
+                                    "team_key": None,
+                                    "cycle_name": None,
+                                    "assignee": None,
+                                    "query": query,
+                                    "limit": None
+                                },
+                                "query": query,
+                                "result_count": 0,
+                                "related_existing_company_data": search_params.get("related_existing_company_data")
+                            }
+                        
+                        # Add default filter to legacy search parameters
+                        search_params["filters"] = search_params.get("filters", [])
+                        search_params["filters"].append(default_filter)
+                        
+                        # Log the legacy search parameters
+                        team_key = search_params.get("team_key")
+                        cycle_name = search_params.get("cycle_name")
+                        assignee_name = search_params.get("assignee_name")
+                        search_limit = search_params.get("limit", limit)
+                        search_query = search_params.get("search_query", query)
+                        
+                        logger.info(f"Using legacy search with parameters: team={team_key}, cycle={cycle_name}, assignee={assignee_name}, limit={search_limit}, query={search_query}")
+                        
+                        # Perform the legacy search
+                        search_results = search_issues(
+                            query=search_query,
+                            team_key=team_key,
+                            cycle_name=cycle_name,
+                            assignee_name=assignee_name,
+                            limit=search_limit
+                        )
+                        
+                        # Return the results and metadata directly
+                        return {
+                            "requires_linear_search": True,
+                            "results": search_results,
+                            "available_teams": teams,
+                            "available_cycles": cycles,
+                            "search_parameters": {
+                                "team_key": team_key,
+                                "cycle_name": cycle_name,
+                                "assignee": assignee_name,
+                                "query": search_query,
+                                "limit": search_limit
+                            },
+                            "query": query,
+                            "result_count": len(search_results),
+                            "related_existing_company_data": search_params.get("related_existing_company_data")
+                        }
                     else:
-                        parts.append(f"Assignee: {issue_data['assignee']}")
-                
-                if 'labels' in issue_data and issue_data['labels']:
-                    if isinstance(issue_data['labels'], list):
-                        labels = [label for label in issue_data['labels']]
-                        parts.append(f"Labels: {', '.join(labels)}")
-                    elif isinstance(issue_data['labels'], dict) and 'nodes' in issue_data['labels']:
-                        # Handle the format seen in the logs
-                        labels = [label.get('name', '') for label in issue_data['labels']['nodes']]
-                        parts.append(f"Labels: {', '.join(labels) or 'None'}")
-                
-                if 'priority' in issue_data:
-                    priority = issue_data['priority']
-                    priority_label = {0: "No priority", 1: "Urgent", 2: "High", 3: "Medium", 4: "Low"}.get(priority, f"Priority {priority}")
-                    parts.append(f"Priority: {priority_label}")
-                
-                if 'created_at' in issue_data:
-                    parts.append(f"Created: {issue_data['created_at']}")
-                elif 'createdAt' in issue_data:
-                    parts.append(f"Created: {issue_data['createdAt']}")
-        else:
-            # Handle the case where issue_data might be something else
-            parts.append(f"Issue data: {str(issue_data)}")
-        
-        parts.append("")  # Add blank line
-    
-    # Add Linear data from the query planner if present
-    if "linear_data" in content:
-        linear_data = content["linear_data"]
-        parts.append("Linear Data Information:")
-        
-        if isinstance(linear_data, dict):
-            if "success" in linear_data and linear_data["success"]:
-                # Add the formatted results from the planner
-                parts.append(linear_data.get("formatted_results", "No formatted results available"))
-            elif "error" in linear_data:
-                parts.append(f"Error retrieving Linear data: {linear_data['error']}")
-                
-                # Add available partial results if present
-                if "partial_results" in linear_data:
-                    parts.append("Partial results available:")
-                    if "teams" in linear_data["partial_results"]:
-                        teams = linear_data["partial_results"]["teams"]
-                        parts.append(f"Available teams: {', '.join([team.get('name', 'Unknown') for team in teams])}")
-                    if "cycles" in linear_data["partial_results"]:
-                        cycles = linear_data["partial_results"]["cycles"]
-                        cycle_names = []
-                        for cycle in cycles:
-                            cycle_number = cycle.get('number', 'Unknown')
-                            cycle_names.append(f"#{cycle_number}")
-                        parts.append(f"Available cycles: {', '.join(cycle_names)}")
-                
-                # Add clarification suggestions if present
-                if "clarification_needed" in linear_data:
-                    for clarification in linear_data["clarification_needed"]:
-                        parts.append(f"Clarification needed: {clarification.get('message', 'Unknown issue')}")
-        else:
-            parts.append("Error: Linear data is not in the expected format")
-        
-        parts.append("")  # Add blank line
-    
-    # Add Linear query results if present (from the old approach)
-    if "linear_query" in content:
-        linear_query_data = content["linear_query"]
-        parts.append("Linear Query Results:")
-        
-        if isinstance(linear_query_data, dict):
-            if "formatted_results" in linear_query_data:
-                parts.append(linear_query_data["formatted_results"])
-            elif "error" in linear_query_data:
-                parts.append(f"Error executing Linear query: {linear_query_data['error']}")
+                        # Check if this is a multi-step query (an array of queries)
+                        is_multi_step = isinstance(search_params, list)
+                        
+                        if is_multi_step:
+                            logger.info(f"Executing multi-step query with {len(search_params)} steps")
+                            
+                            # Process multi-step queries
+                            all_results = []
+                            step_results = {}
+                            final_results = None
+                            
+                            for i, step_query in enumerate(search_params):
+                                logger.info(f"Executing step {i+1} of multi-step query")
+                                
+                                # Extract the result_variable name if specified
+                                result_variable = step_query.pop("result_variable", f"query_{i+1}_result")
+                                
+                                # Process any variable references in the query
+                                processed_query = process_variable_references(step_query, step_results)
+                                
+                                # Execute the query
+                                step_result = advanced_search(processed_query)
+                                
+                                # Store the results for use by subsequent queries
+                                step_results[result_variable] = step_result.get("results", [])
+                                
+                                # Store all step results
+                                all_results.append({
+                                    "step": i+1, 
+                                    "results": step_result.get("results", []),
+                                    "count": step_result.get("count", 0),
+                                    "result_variable": result_variable
+                                })
+                                
+                                # The final step results will be returned as the main results
+                                if i == len(search_params) - 1:
+                                    final_results = step_result
+                            
+                            # Return results from all steps
+                            return {
+                                "requires_linear_search": True,
+                                "is_multi_step": True,
+                                "results": final_results.get("results", []),
+                                "all_steps": all_results,
+                                "available_teams": teams,
+                                "available_cycles": cycles,
+                                "search_parameters": search_params,
+                                "query": query,
+                                "result_count": final_results.get("count", 0) if final_results else 0,
+                                "justification": "Multi-step query executed successfully",
+                                "column_names": final_results.get("column_names", []) if final_results else []
+                            }
+                        else:
+                            # Regular advanced format (single query)
+                            logger.info(f"Using advanced search with query: {search_params}")
+                            
+                            # Add default filter
+                            search_params["filters"] = search_params.get("filters", [])
+                            search_params["filters"].append(default_filter)
+                            
+                            # Execute the advanced search
+                            advanced_results = advanced_search(search_params)
+                            logger.info(f"Advanced search results: {advanced_results}")
+                            
+                            # Return the results and metadata
+                            return {
+                                "requires_linear_search": True,
+                                "results": advanced_results.get("results", []),
+                                "available_teams": teams,
+                                "available_cycles": cycles,
+                                "search_parameters": search_params,
+                                "query": query,
+                                "result_count": advanced_results.get("count", 0),
+                                "query_type": search_params.get("query_type"),
+                                "justification": search_params.get("justification"),
+                                "column_names": advanced_results.get("column_names", [])
+                            }
+                        
+                except Exception as parse_error:
+                    logger.error(f"Error parsing AI response: {parse_error}")
+                    logger.error(f"Raw AI response: {response.choices[0].message.content}")
             else:
-                parts.append("No formatted results available from Linear query")
-        else:
-            parts.append("Error: Linear query data is not in the expected format")
+                # Fallback to defaults if prompts are not available
+                logger.warning("Linear search operator prompts not found, using defaults")
         
-        parts.append("")  # Add blank line
-    
-    # Add Linear working hours data if present
-    if "linear_working_hours" in content:
-        working_hours_data = content["linear_working_hours"]
-        parts.append("Linear Working Hours Information:")
+        # If we get here, execute a basic search with default parameters
+        logger.info(f"Executing basic search with query={query}, limit={limit}")
+        search_results = search_issues(query=query, limit=limit)
         
-        if isinstance(working_hours_data, dict) and "error" in working_hours_data:
-            parts.append(f"Error retrieving working hours: {working_hours_data['error']}")
-        elif isinstance(working_hours_data, dict) and "team_id" in working_hours_data:
-            # Single team data format
-            team_id = working_hours_data.get("team_id", "Unknown")
-            members = working_hours_data.get("members", [])
-            week_start = working_hours_data.get("week_start_date", "Unknown")
-            week_end = working_hours_data.get("week_end_date", "Unknown")
-            
-            parts.append(f"Period: {week_start} to {week_end}")
-            parts.append(f"Team members with logged hours: {len(members)}")
-            
-            # Find users not meeting required hours
-            required_hours = 40  # Default
-            users_below_threshold = [m for m in members if m.get("total_hours", 0) < required_hours]
-            
-            if users_below_threshold:
-                parts.append(f"Users not meeting {required_hours} hours requirement:")
-                for user in users_below_threshold:
-                    parts.append(f"- {user.get('name', 'Unknown')}: {user.get('total_hours', 0)} hours (missing {user.get('missing_hours', 0)} hours)")
-            else:
-                parts.append(f"All users have met the {required_hours} hours requirement.")
-            
-            # Add total and average team hours
-            total_hours = working_hours_data.get("total_team_hours", 0)
-            avg_hours = working_hours_data.get("avg_team_hours", 0)
-            
-            parts.append(f"Total team hours: {total_hours}")
-            parts.append(f"Average hours per member: {avg_hours}")
-            
-        elif isinstance(working_hours_data, list):
-            # All teams data format
-            parts.append(f"Teams with working hours data: {len(working_hours_data)}")
-            
-            for team_data in working_hours_data:
-                team_name = team_data.get("team_name", "Unknown")
-                team_key = team_data.get("team_key", "")
-                week_data = team_data.get("week_data", {})
-                
-                members = week_data.get("members", [])
-                week_start = week_data.get("week_start_date", "Unknown")
-                week_end = week_data.get("week_end_date", "Unknown")
-                
-                parts.append(f"\nTeam: {team_name} ({team_key})")
-                parts.append(f"Period: {week_start} to {week_end}")
-                parts.append(f"Team members with logged hours: {len(members)}")
-                
-                # Find users not meeting required hours
-                required_hours = 40  # Default
-                users_below_threshold = [m for m in members if m.get("total_hours", 0) < required_hours]
-                
-                if users_below_threshold:
-                    parts.append(f"Users not meeting {required_hours} hours requirement:")
-                    for user in users_below_threshold[:5]:  # Limit to 5 users to avoid long responses
-                        parts.append(f"- {user.get('name', 'Unknown')}: {user.get('total_hours', 0)} hours (missing {user.get('missing_hours', 0)} hours)")
-                    
-                    if len(users_below_threshold) > 5:
-                        parts.append(f"... and {len(users_below_threshold) - 5} more users")
-                else:
-                    parts.append(f"All users have met the {required_hours} hours requirement.")
-                
-                # Add total and average team hours
-                total_hours = week_data.get("total_team_hours", 0)
-                avg_hours = week_data.get("avg_team_hours", 0)
-                
-                parts.append(f"Total team hours: {total_hours}")
-                parts.append(f"Average hours per member: {avg_hours}")
-        
-        parts.append("")  # Add blank line
+        # Return the results and metadata
+        return {
+            "requires_linear_search": True,
+            "results": search_results,
+            "available_teams": teams,
+            "available_cycles": cycles,
+            "search_parameters": {
+                "team_key": None,
+                "cycle_name": None,
+                "assignee": None,
+                "query": query,
+                "limit": limit
+            },
+            "query": query,
+            "result_count": len(search_results),
+            "related_existing_company_data": None
+        }
     
-    # Add GitHub repo data if present
-    if "github_repo" in content:
-        repo_data = content["github_repo"]
-        parts.append("GitHub Repository Information:")
-        
-        if isinstance(repo_data, dict) and "error" in repo_data:
-            parts.append(f"Error retrieving GitHub repository: {repo_data['error']}")
-        else:
-            parts.append(f"Repository: {repo_data.get('full_name', 'Unknown')}")
-            parts.append(f"Description: {repo_data.get('description', 'No description')}")
-            parts.append(f"Stars: {repo_data.get('stargazers_count', 0)}")
-            parts.append(f"Forks: {repo_data.get('forks_count', 0)}")
-            parts.append(f"Language: {repo_data.get('language', 'Not specified')}")
-            
-            if "readme" in repo_data:
-                parts.append(f"\nReadme:")
-                parts.append(repo_data["readme"])
-        
-        parts.append("")  # Add blank line
-    
-    # Add URL content if present
-    for key, value in content.items():
-        if key.startswith("url_"):
-            url = key[len("url_"):]
-            parts.append(f"Content from URL: {url}")
-            
-            if isinstance(value, dict) and "error" in value:
-                parts.append(f"Error retrieving URL content: {value['error']}")
-            else:
-                # Limit content length
-                content_text = str(value)
-                if len(content_text) > 2000:
-                    content_text = content_text[:2000] + "... (content truncated)"
-                
-                parts.append(content_text)
-            
-            parts.append("")  # Add blank line
-    
-    # Add Twitter content if present
-    for key, value in content.items():
-        if key.startswith("twitter_"):
-            url = key[len("twitter_"):]
-            parts.append(f"Twitter Content from URL: {url}")
-            
-            if isinstance(value, dict) and "error" in value:
-                parts.append(f"Error retrieving Twitter content: {value['error']}")
-            elif isinstance(value, dict):
-                tweet_text = value.get("text", "No tweet text available")
-                parts.append(f"Tweet: {tweet_text}")
-                
-                user_name = value.get("user", {}).get("name", "Unknown")
-                username = value.get("user", {}).get("username", "Unknown")
-                parts.append(f"Posted by: {user_name} (@{username})")
-                
-                if "thread_tweets" in value and value["thread_tweets"]:
-                    parts.append("\nThread:")
-                    for tweet in value["thread_tweets"]:
-                        parts.append(f"- {tweet.get('text', 'No text')}")
-            
-            parts.append("")  # Add blank line
-    
-    # Add channel info if present
-    if "channel_info" in content:
-        channel_data = content["channel_info"]
-        parts.append("Channel Information:")
-        
-        if isinstance(channel_data, dict) and "error" in channel_data:
-            parts.append(f"Error retrieving channel info: {channel_data['error']}")
-        else:
-            parts.append(f"Channel: {channel_data.get('name', 'Unknown')}")
-            parts.append(f"Topic: {channel_data.get('topic', {}).get('value', 'No topic')}")
-            parts.append(f"Purpose: {channel_data.get('purpose', {}).get('value', 'No purpose')}")
-            parts.append(f"Members: {channel_data.get('num_members', 0)}")
-        
-        parts.append("")  # Add blank line
-    
-    # Add image information if present
-    if recent_images and len(recent_images) > 0:
-        parts.append("Recent Images in Channel:")
-        
-        for i, image in enumerate(recent_images):
-            parts.append(f"Image {i+1}:")
-            parts.append(f"Posted by: {image.get('user', 'Unknown')}")
-            parts.append(f"URL: {image.get('url', 'No URL')}")
-            
-            # Add the image for vision analysis
-            image_urls.append({
-                "url": image.get('url'),
-                "description": f"Image {i+1} from the channel"
-            })
-        
-        parts.append("")  # Add blank line
-    
-    # Build the final context
-    context_parts = "\n".join(parts)
-    
-    # Use prompt template from YAML config
-    context_template = PROMPTS.get("build_response_context", {}).get("context_template", "")
-    
-    # Fallback if not in YAML
-    if not context_template:
-        context_template = """
-        User query: {query}
-        
-        {content_parts}
-        
-        Based on the above information, please provide a helpful, concise, and accurate response to the user's query.
-        """
-    
-    # Format the context
-    context = context_template.format(
-        query=query,
-        content_parts=context_parts
-    )
-    
-    logger.info(f"Built context with {len(context)} characters")
-    return context, image_urls
+    except Exception as e:
+        logger.error(f"Error performing Linear search: {str(e)}")
+        logger.error(f"Exception traceback: {traceback.format_exc()}")
+        # Log more details about the exception
+        if hasattr(e, "__dict__"):
+            logger.error(f"Exception details: {e.__dict__}")
+        return {
+            "error": str(e),
+            "results": [],
+            "query": query,
+            "result_count": 0,
+            "requires_linear_search": True,
+            "related_existing_company_data": None
+        }
 
-async def call_ai(context: str, image_urls: List[Dict[str, Any]] = None):
+def process_variable_references(query, step_results):
     """
-    Call the AI model with the full context and any images that need to be analyzed.
-    Properly handles Slack's private image URLs by downloading and base64 encoding them.
-    """
-    logger.info("Calling AI with context")
+    Process variable references in query values.
     
+    Args:
+        query: The query spec to process
+        step_results: Dictionary of previous query results
+        
+    Returns:
+        Processed query with variable references resolved
+    """
+    processed_query = json.loads(json.dumps(query))  # Deep copy
+    
+    # Process filters that might contain variable references
+    if "filters" in processed_query:
+        # Create a list to keep track of filters to remove (if their value lists are empty)
+        filters_to_remove = []
+        
+        for i, filter_item in enumerate(processed_query["filters"]):
+            if "value" in filter_item and isinstance(filter_item["value"], str):
+                # Check if this is a variable reference
+                if filter_item["value"].startswith("{{") and filter_item["value"].endswith("}}"):
+                    # Extract variable reference
+                    ref = filter_item["value"][2:-2]  # Remove {{ }}
+                    var_name, field_name = ref.split(".")
+                    
+                    if var_name in step_results:
+                        # Replace with actual values from previous results
+                        values = [item.get(field_name) for item in step_results[var_name] if field_name in item]
+                        values = [v for v in values if v is not None]  # Filter out None values
+                        
+                        # For IN operators, we need to handle PostgreSQL array parameters correctly
+                        if filter_item.get("operator", "=") == "IN":
+                            if values:
+                                # Change from 'IN' to '= ANY' for proper PostgreSQL array handling
+                                processed_query["filters"][i]["operator"] = "= ANY"
+                                processed_query["filters"][i]["value"] = values
+                            else:
+                                # If no values found, mark this filter for removal
+                                logger.warning(f"Empty value list for reference {ref}, will skip this filter")
+                                filters_to_remove.append(i)
+                        # For other operators, take the first value if available
+                        elif values:
+                            processed_query["filters"][i]["value"] = values[0]
+                        else:
+                            logger.warning(f"No values found for reference {ref}, will skip this filter")
+                            filters_to_remove.append(i)
+                    else:
+                        logger.warning(f"Variable {var_name} not found in results, will skip this filter")
+                        filters_to_remove.append(i)
+        
+        # Remove filters with empty value lists (in reverse order to avoid index shifting)
+        for i in sorted(filters_to_remove, reverse=True):
+            processed_query["filters"].pop(i)
+    
+    # Could extend this to process other fields that might contain references
+    return processed_query
+
+async def generate_linear_issue(query: str, history_context: str, sender_name: str) -> Dict[str, Any]:
+    """
+    Generate Linear issue based on the user's query.
+    """
     try:
+        linear_names = get_linear_names()
+        create_issue_system_prompt = PROMPTS.get("linear_issue_creator", {}).get("system", "").format(
+            linear_names=linear_names
+        )
+        if not create_issue_system_prompt:
+            create_issue_system_prompt = """You are a Linear issue creator. You must respond with valid JSON containing the following fields:
+            {
+                "title": "issue title",
+                "description": "issue description",
+                "team_key": "team key (required)",
+                "priority": priority number (0-4, optional, defaults to 0)
+            }"""
+
+        create_issue_user_prompt = PROMPTS.get("linear_issue_creator", {}).get("user_template", "").format(
+            text=query,
+            history_context=history_context,
+            sender_name=sender_name
+        )
+        
+        # Call OpenAI to analyze the query
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
-        
-        # Get system prompts from YAML
-        system_text_prompt = PROMPTS.get("call_ai", {}).get("system_text", "")
-        system_vision_prompt = PROMPTS.get("call_ai", {}).get("system_vision", "")
-        
-        # Check if we have images to include in the request
-        if image_urls and len(image_urls) > 0:
-            logger.info(f"Including {len(image_urls)} images in AI request")
-            
-            # Create a multimodal message array
-            user_message_content = [
-                {"type": "text", "text": context}
-            ]
-            
-            # Process and add images (up to 4 to keep request size manageable)
-            for img in image_urls[:4]:
-                if img.get("url"):
-                    logger.info(f"Processing image: {img.get('title', 'Image')}")
-                    
-                    # Download and prepare the image
-                    image_content = await prepare_image_for_openai(img["url"])
-                    
-                    if image_content:
-                        logger.info(f"Successfully prepared image for OpenAI")
-                        user_message_content.append(image_content)
-                    else:
-                        logger.error(f"Failed to prepare image: {img.get('title', 'Image')}")
-            
-            # Only proceed with vision model if we successfully prepared at least one image
-            if len(user_message_content) > 1:
-                # Make multimodal API call
-                response = client.chat.completions.create(
-                    model=AI_MODEL,
-                    messages=[
-                        {"role": "system", "content": system_vision_prompt},
-                        {"role": "user", "content": user_message_content}
-                    ]
-                )
-            else:
-                # If all images failed, fall back to text-only
-                logger.warning("All images failed to prepare. Falling back to text-only request.")
-                response = client.chat.completions.create(
-                    model=AI_MODEL,
-                    messages=[
-                        {"role": "system", "content": system_text_prompt},
-                        {"role": "user", "content": context + "\n\nNote: There were images in the conversation, but they couldn't be processed."}
-                    ]
-                )
-        else:
-            # Text-only request
+        if AI_MODEL.startswith("gpt"):
             response = client.chat.completions.create(
                 model=AI_MODEL,
                 messages=[
-                    {"role": "system", "content": system_text_prompt},
-                    {"role": "user", "content": context}
+                    {"role": "system", "content": create_issue_system_prompt},
+                    {"role": "user", "content": create_issue_user_prompt}
+                ],
+                response_format={"type": "json_object"}
+            )
+        elif AI_MODEL.startswith("o"):
+            prompt = create_issue_system_prompt + "\n\n" + create_issue_user_prompt
+            response = client.chat.completions.create(
+                model=AI_MODEL,
+                messages=[
+                    {"role": "user", "content": prompt}
                 ]
             )
-        
-        ai_response = response.choices[0].message.content
-        logger.info(f"AI response received: {ai_response}")
-        return ai_response
-    except Exception as e:
-        error_message = f"Error calling AI: {str(e)}"
-        logger.error(error_message)
-        return f"Sorry, I encountered an error analyzing the content: {str(e)}"
 
-async def evaluate_search_parameters(query: str, content_analysis: ContentAnalysisResult):
-    """
-    Evaluate how to search channel history based on the query and initial content analysis.
-    Determines search depth, relevance criteria, and time range.
-    """
-    logger.info("Evaluating search parameters for channel history")
-    
-    # If channel history isn't required, return minimal parameters
-    if not content_analysis.requires_history:
-        logger.info("Channel history search not required - returning minimal parameters")
-        return {
-            "time_range": "days",
-            "time_value": 1,
-            "message_count": 0,  # Set to 0 to skip search
-            "keywords": [],
-            "users": [],
-            "resource_types": []
-        }
-    
-    try:
-        # Get the prompt templates from YAML
-        system_prompt = PROMPTS.get("evaluate_search_parameters", {}).get("system", "")
-        user_prompt_template = PROMPTS.get("evaluate_search_parameters", {}).get("user_template", "")
-        
-        # Format the user prompt
-        user_prompt = user_prompt_template.format(
-            query=query,
-            content_analysis=content_analysis.dict()
-        )
-        
-        client = openai.OpenAI(api_key=OPENAI_API_KEY)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            response_format={"type": "json_object"}
-        )
-        
-        search_params = json.loads(response.choices[0].message.content)
-        logger.info(f"Search parameters determined: {search_params}")
-        
-        return search_params
-    
-    except Exception as e:
-        logger.error(f"Error determining search parameters: {str(e)}")
-        # Return default parameters
-        return {
-            "time_range": "days",
-            "message_count": 50,
-            "relevance_keywords": [word.lower() for word in query.split() if len(word) > 3],
-            "user_focus": None,
-            "resource_types": ["text"]
-        }
-
-async def evaluate_search_results(query: str, search_results: List[Dict[str, Any]], content_analysis: ContentAnalysisResult):
-    """
-    Evaluate search results to find the most relevant messages, URLs, and files.
-    Now with enhanced image identification.
-    """
-    logger.info(f"Evaluating {len(search_results)} search results against query: {query[:50]}...")
-    
-    try:
-        # Extract all URLs from the search results for reference
-        all_urls = []
-        for msg in search_results:
-            urls = extract_urls(msg.get("text", ""))
-            if urls:
-                logger.info(f"Extracted {len(urls)} URLs: {urls}")
-                all_urls.extend(urls)
-                
-        # Format messages for evaluation, including file information
-        formatted_messages = []
-        for i, msg in enumerate(search_results):
-            message_info = {
-                "index": i,
-                "text": msg.get("text", ""),
-                "has_files": msg.get("has_files", False),
-                "has_images": msg.get("has_images", False),
-                "has_urls": msg.get("has_urls", False),
-                "has_code": msg.get("has_code", False),
-            }
-            
-            # Include file details for images
-            if message_info["has_images"] and "files" in msg:
-                message_info["files"] = []
-                for file_idx, file in enumerate(msg["files"]):
-                    if file.get("mimetype", "").startswith("image/"):
-                        file_info = {
-                            "index": file_idx,
-                            "type": "image",
-                            "name": file.get("title", "Image"),
-                            "url": file.get("url_private", "")
-                        }
-                        message_info["files"].append(file_info)
-                        
-            formatted_messages.append(message_info)
-        
-        # Get the prompt templates from YAML
-        system_prompt = PROMPTS.get("evaluate_search_results", {}).get("system", "")
-        user_prompt_template = PROMPTS.get("evaluate_search_results", {}).get("user_template", "")
-        
-        # Format the user prompt
-        user_prompt = user_prompt_template.format(
-            query=query,
-            formatted_messages=json.dumps(formatted_messages, indent=2)
-        )
-        
-        # Get AI to evaluate the relevance of each message
-        client = openai.OpenAI(api_key=OPENAI_API_KEY)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            response_format={"type": "json_object"}
-        )
-        
         # Parse the response
-        result = json.loads(response.choices[0].message.content)
-        logger.info(f"Evaluation result: identified {len(result.get('relevant_message_indices', []))} relevant messages")
-        logger.info(f"Evaluation result: {result}")
+        result = response.choices[0].message.content
+        logger.info(f"AI for creating linear issue: {result}")
+        if result.startswith("```json"):
+            result = result.strip("```json")
+        elif result.startswith("```"):
+            result = result.strip("```")
+        result = result.strip()  # Remove any extra whitespace
         
-        # Build the structured evaluation result
-        relevant_messages = []
-        for idx in result.get("relevant_message_indices", []):
-            if idx < len(search_results):
-                relevant_messages.append(search_results[idx])
-                
-        # Extract and add image URLs
-        image_urls = []
-        for msg_idx in result.get("relevant_message_indices", []):
-            if msg_idx < len(search_results) and "files" in search_results[msg_idx]:
-                for file in search_results[msg_idx]["files"]:
-                    if file.get("mimetype", "").startswith("image/"):
-                        image_urls.append({
-                            "url": file.get("url_private", ""),
-                            "title": file.get("title", "Image"),
-                            "from_user": search_results[msg_idx].get("user", "Unknown")
-                        })
+        linear_issue_args = json.loads(result)
         
-        evaluation_result = {
-            "relevant_messages": relevant_messages,
-            "image_urls": image_urls,  # Add image URLs directly to evaluation result
-            "key_insights": result.get("key_insights", [])
-        }
-        
-        return evaluation_result
-        
-    except Exception as e:
-        logger.error(f"Error evaluating search results: {str(e)}")
-        # Return a simplified result if evaluation fails
-        return {"relevant_messages": search_results[:5]}
+        if linear_issue_args.get("team_key") is None:
+            return {"success": False, "error": "Must specify the team key for the issue."}
 
-async def determine_required_content_sources(query: str, search_results: List[Dict[str, Any]], content_analysis: ContentAnalysisResult):
-    """
-    Analyze search results and determine which external content sources need to be fetched.
-    This optimizes API calls by only fetching what's actually needed.
-    
-    Returns:
-        Dict with boolean flags for each content source
-    """
-    logger.info("Determining required content sources based on search results")
-    
-    # Start fresh based on what we need for this specific query
-    required_sources = {
-        "linear": False,
-        "github": False,
-        "url_content": False,
-        "twitter": False,
-        "channel_info": False,
-        "linear_query": False           # For generalized Linear queries
-    }
-    
-    # Check for general Linear query directly
-    if getattr(content_analysis, "linear_query", False):
-        logger.info("General Linear query detected, will fetch Linear data")
-        required_sources["linear_query"] = True
-        
-    # Working hours keywords that indicate we should check working hours
-    working_hours_keywords = [
-        "hours", "working", "time tracking", "timesheet", "logged",
-        "completed", "tracking", "time", "week", "required"
-    ]
-    
-    # If query contains "who hasn't" or similar with working hours keywords
-    if (("who" in query.lower() and "not" in query.lower()) or 
-        "who hasn't" in query.lower() or 
-        "hasn't completed" in query.lower() or
-        "didn't complete" in query.lower()) and any(keyword in query.lower() for keyword in working_hours_keywords):
-        
-        logger.info("Query asking about who hasn't completed working hours")
-        required_sources["linear_working_hours"] = True
-    
-    # If no search results, check if we need content from the original query
-    if not search_results:
-        # Only include sources specifically mentioned in the user's query
-        required_sources["linear"] = content_analysis.linear_issue is not None
-        required_sources["github"] = content_analysis.github_repo is not None
-        required_sources["url_content"] = content_analysis.urls is not None and len(content_analysis.urls) > 0
-        required_sources["twitter"] = content_analysis.twitter_urls is not None and len(content_analysis.twitter_urls) > 0
-        
-        # Preserve the working hours and general Linear query flags we set earlier
-        if getattr(content_analysis, "linear_working_hours_query", False):
-            required_sources["linear_working_hours"] = True
-        if getattr(content_analysis, "linear_query", False):
-            required_sources["linear_query"] = True
-            
-        return required_sources
-    
-    try:
-        # Extract URLs from the search results
-        urls = []
-        for msg in search_results:
-            if msg.get("text"):
-                extracted_urls = extract_urls(msg["text"])
-                if extracted_urls:
-                    urls.extend(extracted_urls)
-        
-        # Get the prompt templates from YAML
-        system_prompt = PROMPTS.get("determine_required_content_sources", {}).get("system", "")
-        user_prompt_template = PROMPTS.get("determine_required_content_sources", {}).get("user_template", "")
-        
-        # Create a summary of what the query seems to be about
-        is_article = "article" in query.lower() or "link" in query.lower() or "url" in query.lower()
-        is_code = "code" in query.lower() or "github" in query.lower() or "repo" in query.lower()
-        is_issue = "issue" in query.lower() or "ticket" in query.lower() or "linear" in query.lower()
-        is_tweet = "tweet" in query.lower() or "twitter" in query.lower() or "x.com" in query.lower()
-        is_working_hours = "hours" in query.lower() or "time" in query.lower() or any(keyword in query.lower() for keyword in working_hours_keywords)
-        is_linear_query = getattr(content_analysis, "linear_query", False) or "linear" in query.lower()
-        
-        # Format the user prompt
-        user_prompt = user_prompt_template.format(
-            query=query,
-            urls=urls,
-            is_article=is_article,
-            is_code=is_code,
-            is_issue=is_issue,
-            is_tweet=is_tweet,
-            is_working_hours=is_working_hours,
-            is_linear_query=is_linear_query
+        # Create issue with default priority if not specified
+        created_issue = await linear_client.create_linear_issue(
+            title=linear_issue_args["title"],
+            description=linear_issue_args.get("description", ""),  # Default to empty string if missing
+            team_key=linear_issue_args["team_key"],
+            priority=linear_issue_args.get("priority", 0)  # Default to 0 if missing
         )
         
-        # Get AI recommendation
+        return created_issue
+
+    except Exception as e:
+        logger.error(f"Error generating Linear issue: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+async def stream_ai_response(context: str, ai_request: AIRequest, thread_ts: str, sender_name: str) -> Optional[str]:
+    try:
+        # Use existing message_ts from the AI request instead of creating a new message
+        message_ts = ai_request.message_ts
+
+        # Get system prompts
+        slack_users = get_slack_users_list()
+        draft_system_prompt = PROMPTS.get("draft_response", {}).get("system_text", "").format(
+            slack_users=slack_users,
+            sender_name=sender_name
+        )
+        if not draft_system_prompt:
+            draft_system_prompt = "You are an AI assistant for Token Metrics."
+
+        final_system_prompt = PROMPTS.get("final_response", {}).get("system_text", "")
+        if not final_system_prompt:
+            final_system_prompt = "Refine the draft response for Slack formatting."
+
+        # Get conversation history for this thread
+        conversation_key = f"{ai_request.channel_id}:{thread_ts}"
+        messages = []
+        
+        # Add system message for draft
+        messages.append({"role": "system", "content": draft_system_prompt})
+        
+        # Add conversation history if it exists
+        if conversation_key in conversation_history and conversation_history[conversation_key]:
+            for msg in conversation_history[conversation_key]:
+                messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
+        
+        # Add current query
+        messages.append({"role": "user", "content": context})
+
+        # STEP 1: Generate draft response with OpenAI
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            response_format={"type": "json_object"}
+        logger.info(f"Sending {len(messages)} messages to OpenAI for draft generation")
+        
+        # Generate draft response
+        if AI_MODEL.startswith("gpt"):
+            draft_response = client.chat.completions.create(
+                model=AI_MODEL,
+                messages=messages,
+            )
+        elif AI_MODEL.startswith("o"):
+            prompt = draft_system_prompt + "\n\n" + "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
+            draft_response = client.chat.completions.create(
+                model=AI_MODEL,
+                messages=[{"role": "user", "content": prompt}]
+            )
+        
+        # Get the draft content
+        draft_content = draft_response.choices[0].message.content
+        logger.info(f"Draft response generated ({len(draft_content)} chars)")
+        
+        # STEP 2: Refine the draft with final_response prompt
+        final_messages = [
+            {"role": "system", "content": final_system_prompt},
+            {"role": "user", "content": f"Draft response to refine:\n\n{draft_content}"}
+        ]
+        
+        logger.info("Sending draft to refinement")
+        
+        # Stream the final response
+        full_response = ""
+        
+        # Stream the refined response
+        stream = client.chat.completions.create(
+            model="gpt-4o-mini", #this is easy, should be fast
+            messages=final_messages,
+            stream=True
         )
         
-        ai_recommendations = json.loads(response.choices[0].message.content)
-        logger.info(f"AI recommendations for content sources: {ai_recommendations}")
-        
-        # Use the AI recommendations directly instead of merging
-        for source, needed in ai_recommendations.items():
-            source_key = source
-            if source == "linear_issue":
-                source_key = "linear"
-            if source_key in required_sources:
-                required_sources[source_key] = needed
-        
-        # Always preserve the linear_query flag if it was set during analysis
-        if getattr(content_analysis, "linear_query", False):
-            required_sources["linear_query"] = True
-        
-        logger.info(f"Final required content sources: {required_sources}")
-        return required_sources
-        
-    except Exception as e:
-        logger.error(f"Error determining content sources: {str(e)}")
-        # Fall back to minimal analysis if anything fails, but preserve working hours flag
-        fallback_sources = {
-            "linear_issue": False,
-            "github_repo": False,
-            "url_content": True,  # Default to fetching URLs since that's usually helpful
-            "twitter": False,
-            "channel_info": False,
-            "linear_working_hours": required_sources.get("linear_working_hours", False),  # Preserve this value
-            "linear_query": required_sources.get("linear_query", False)  # Preserve generalized Linear query flag
-        }
-        return fallback_sources
-
-def detect_image_related_query(query: str) -> bool:
-    """Detect if a query is related to images or visual content."""
-    # Keywords that suggest the user is asking about an image
-    image_keywords = [
-        "image", "picture", "photo", "pic", "screenshot", "chart", "graph",
-        "see", "look", "show", "display", "visual", "diagram", 
-    ]
-    
-    # Convert query to lowercase for case-insensitive matching
-    query_lower = query.lower()
-    
-    # Check for image keywords
-    for keyword in image_keywords:
-        if keyword in query_lower:
-            return True
-
-    
-    return False
-
-async def get_recent_messages(channel_id: str, limit: int = 10):
-    """Fetch the most recent messages from a channel."""
-    try:
-        result = slack_client.conversations_history(
-            channel=channel_id,
-            limit=limit
+        # Create a new message in the thread for the actual response
+        initial_response = slack_client.chat_postMessage(
+            channel=ai_request.channel_id,
+            thread_ts=thread_ts,
+            text="..."
         )
+        response_message_ts = initial_response["ts"]
         
-        if not result["ok"]:
-            logger.error(f"Error fetching recent messages: {result.get('error')}")
-            return []
+        buffer = ""
+        last_update_time = time.time()
+        first_chunk = True
+        message_parts = []  # Store message parts if we need to split
+        current_part = ""
+        
+        for chunk in stream:
+            current_time = time.time()
             
-        return result["messages"]
+            if chunk.choices and chunk.choices[0].delta.content:
+                content = chunk.choices[0].delta.content
+                full_response += content
+                buffer += content
+                current_part += content
+                
+                # Delete the acknowledge message as soon as we receive first chunk
+                if first_chunk:
+                    first_chunk = False
+                    try:
+                        # Try to delete the processing message
+                        slack_client.chat_delete(
+                            channel=ai_request.channel_id,
+                            ts=message_ts
+                        )
+                        logger.info(f"Deleted processing message with ts: {message_ts}")
+                    except SlackApiError as e:
+                        logger.warning(f"Could not delete processing message: {e.response.get('error', '')}")
+                
+                # Format the buffer for Slack before sending updates
+                formatted_buffer = format_for_slack(buffer)
+                formatted_full_response = format_for_slack(full_response)
+                
+                # Check if current part is approaching Slack's limit (3000 chars to be safe)
+                if len(current_part) > 3000:
+                    message_parts.append(current_part)
+                    current_part = ""
+                
+                # Update message every 2.9 seconds or when buffer reaches 100 chars
+                if current_time - last_update_time > 2.9 or len(buffer) > 100:
+                    try:
+                        # If we have multiple parts, update the last message and create new ones
+                        if message_parts:
+                            # Update existing messages
+                            for i, part in enumerate(message_parts[:-1]):
+                                formatted_part = format_for_slack(part)
+                                if i == 0:
+                                    slack_client.chat_update(
+                                        channel=ai_request.channel_id,
+                                        ts=response_message_ts,
+                                        text=formatted_part,
+                                        mrkdwn=True
+                                    )
+                                else:
+                                    # Create new message for each additional part
+                                    slack_client.chat_postMessage(
+                                        channel=ai_request.channel_id,
+                                        thread_ts=thread_ts,
+                                        text=formatted_part,
+                                        mrkdwn=True
+                                    )
+                            # Clear processed parts
+                            message_parts = []
+                        
+                        # Update or create message with current content
+                        if current_part:
+                            formatted_current = format_for_slack(current_part)
+                            slack_client.chat_update(
+                                channel=ai_request.channel_id,
+                                ts=response_message_ts,
+                                text=formatted_current,
+                                mrkdwn=True
+                            )
+                        
+                        buffer = ""
+                        last_update_time = current_time
+                    except SlackApiError as e:
+                        if e.response["error"] == "msg_too_long":
+                            # If message is too long, split it and create new messages
+                            message_parts.append(current_part)
+                            current_part = ""
+                        else:
+                            logger.warning(f"Failed to update message: {str(e)}")
+        
+        # Handle any remaining content
+        if current_part:
+            message_parts.append(current_part)
+        
+        # Send all remaining parts
+        try:
+            for i, part in enumerate(message_parts):
+                formatted_part = format_for_slack(part)
+                if i == 0:
+                    slack_client.chat_update(
+                        channel=ai_request.channel_id,
+                        ts=response_message_ts,
+                        text=formatted_part,
+                        mrkdwn=True
+                    )
+                else:
+                    # Create new message for each additional part
+                    slack_client.chat_postMessage(
+                        channel=ai_request.channel_id,
+                        thread_ts=thread_ts,
+                        text=formatted_part,
+                        mrkdwn=True
+                    )
+            
+            # Store the full response in conversation history
+            conversation_key = f"{ai_request.channel_id}:{thread_ts}"
+            conversation_history[conversation_key].append({
+                "role": "assistant",
+                "content": full_response,
+                "timestamp": float(response_message_ts)
+            })
+            logger.info(f"Stored bot response in conversation history")
+            
+        except SlackApiError as e:
+            logger.warning(f"Failed to send final messages: {str(e)}")
+                
+        return response_message_ts
+        
     except Exception as e:
-        logger.error(f"Error fetching recent messages: {str(e)}")
+        logger.error(f"Error in streaming AI response: {str(e)}")
+        try:
+            slack_client.chat_postMessage(
+                channel=ai_request.channel_id,
+                thread_ts=thread_ts,
+                text=f"Sorry, I encountered an error: {str(e)}"
+            )
+        except:
+            pass
+        return None
+
+def format_linear_search_results(linear_results: Dict[str, Any]) -> List[str]:
+    """
+    Format Linear search results for inclusion in the AI context.
+    
+    Args:
+        linear_results: Results from Linear RAG search
+        
+    Returns:
+        List of formatted context strings
+    """
+    context_parts = []
+    
+    if "error" in linear_results:
+        context_parts.append(f"\nError searching Linear issues: {linear_results['error']}")
+        return context_parts
+        
+    if not linear_results.get("requires_linear_search", True) and linear_results.get("related_existing_company_data"):
+        # If no search is needed but we have company data to share
+        context_parts.append(f"\nCompany Information:")
+        context_parts.append(linear_results.get("related_existing_company_data"))
+        return context_parts
+        
+    # Check if we have a query type and it's an analytical query
+    query_type = linear_results.get("query_type")
+    if query_type in ["status_report", "performance_metrics", "workload_distribution", "time_based_analysis"]:
+        # Format analytical results
+        context_parts.append(f"\nLinear {query_type.replace('_', ' ')} results:")
+        
+        if linear_results.get("justification"):
+            context_parts.append(f"Analysis: {linear_results.get('justification')}")
+            
+        results = linear_results.get("results", [])
+        column_names = linear_results.get("column_names", []) or []  # Set empty list if column_names is None
+        
+        if not results:
+            context_parts.append("No data found for this analysis.")
+            return context_parts
+            
+        # Add table header for analytical queries with column names
+        if column_names and query_type != "status_report":
+            header = " | ".join(column_names)
+            context_parts.append(f"\n{header}")
+            context_parts.append("-" * len(header))
+            
+        for i, issue in enumerate(results, 1):
+            # Check if this is a standard issue or not
+            if isinstance(issue, dict) and "title" in issue:
+                # Standard issue format - only include essential information
+                issue_id = issue.get('issue_id', 'No ID')
+                context_parts.append(f"{i}. {issue.get('title', 'Untitled')} ({issue_id})")
+                context_parts.append(f"Description: {issue.get('description', 'No description available')}")
+                
+                # Add assignee info if available
+                assignee = issue.get('assignee', '')
+                if assignee:
+                    context_parts.append(f"   Assignee: {assignee}")
+                
+                # Add state if available
+                state = issue.get('state', '')
+                if state:
+                    context_parts.append(f"   State: {state}")
+                
+                # Add priority if available (but not other metadata)
+                priority = issue.get('priority', '')
+                if priority:
+                    context_parts.append(f"   Priority: {priority}")
+                
+                # Add estimate if available
+                estimate = issue.get('estimate', '')
+                if estimate:
+                    context_parts.append(f"   Estimated time (in hours): {estimate}")
+                
+                context_parts.append("--------------------------------")
+            else:
+                # Non-standard format, just output as is but filter out sensitive fields
+                if isinstance(issue, dict):
+                    # Filter out excluded fields
+                    filtered_issue = {k: v for k, v in issue.items() if k not in 
+                                    ['comments', 'team', 'created_at', 'updated_at', 
+                                    'completed_at', 'full_context']}
+                    context_parts.append(f"{i}. {filtered_issue}")
+                else:
+                    context_parts.append(f"{i}. {issue}")
+        
+        return context_parts
+
+    elif linear_results.get("query_type") == "basic_filter":
+        # For basic filters, status reports without grouping, or other query types
+        # Include search parameters used in the context
+        search_params = linear_results.get("search_parameters", {})
+        search_context = []
+        
+        # Check if we're using legacy or advanced search parameters
+        if isinstance(search_params, dict) and "team_key" in search_params:
+            # Legacy format
+            if search_params.get("team_key"):
+                search_context.append(f"Team: {search_params['team_key']}")
+            if search_params.get("cycle_name"):
+                search_context.append(f"Cycle: {search_params['cycle_name']}")
+            if search_params.get("assignee"):
+                search_context.append(f"Assignee: {search_params['assignee']}")
+        else:
+            # Advanced format - extract filters
+            filters = search_params.get("filters", [])
+            for filter_item in filters:
+                field = filter_item.get("field", "")
+                value = filter_item.get("value", "")
+                operator = filter_item.get("operator", "=")
+                
+                # Format the field name
+                if "team->key" in field:
+                    field_name = "Team"
+                elif "cycle->name" in field:
+                    field_name = "Cycle"
+                elif "assignee->name" in field:
+                    field_name = "Assignee"
+                elif "state" in field:
+                    field_name = "State"
+                elif "priority" in field:
+                    field_name = "Priority"
+                else:
+                    field_name = field.split("->")[-1].capitalize()
+                    
+                search_context.append(f"{field_name} {operator} {value}")
+        
+        if search_context:
+            context_parts.append(f"\nSearch filters applied: {', '.join(search_context)}")
+        
+        # Handle standard search results
+        results = linear_results.get("results", [])
+        if not results:
+            context_parts.append("\nNo relevant Linear issues found.")
+            return context_parts
+        
+        context_parts.append(f"\nFound {len(results)} relevant Linear issues:")
+        
+        # Format Linear issues for context - exclude unnecessary data
+        for i, issue in enumerate(results, 1):
+            # Check if this is a standard issue or not
+            if isinstance(issue, dict) and "title" in issue:
+                # Standard issue format - only include essential information
+                issue_id = issue.get('issue_id', 'No ID')
+                context_parts.append(f"{i}. {issue.get('title', 'Untitled')} ({issue_id})")
+                context_parts.append(f"Description: {issue.get('description', 'No description available')}")
+                
+                # Add assignee info if available
+                assignee = issue.get('assignee', '')
+                if assignee:
+                    context_parts.append(f"   Assignee: {assignee}")
+                
+                # Add state if available
+                state = issue.get('state', '')
+                if state:
+                    context_parts.append(f"   State: {state}")
+                
+                # Add priority if available (but not other metadata)
+                priority = issue.get('priority', '')
+                if priority:
+                    context_parts.append(f"   Priority: {priority}")
+                
+                # Add estimate if available
+                estimate = issue.get('estimate', '')
+                if estimate:
+                    context_parts.append(f"   Estimated time (in hours): {estimate}")
+                
+                context_parts.append("--------------------------------")
+            else:
+                # Non-standard format, just output as is but filter out sensitive fields
+                if isinstance(issue, dict):
+                    # Filter out excluded fields
+                    filtered_issue = {k: v for k, v in issue.items() if k not in 
+                                    ['comments', 'team', 'created_at', 'updated_at', 
+                                    'completed_at', 'full_context']}
+                    context_parts.append(f"{i}. {filtered_issue}")
+                else:
+                    context_parts.append(f"{i}. {issue}")
+    else:
+        # Default handler for any other query type
+        results = linear_results.get("results", [])
+        if not results:
+            context_parts.append("\nNo relevant Linear issues found.")
+            return context_parts
+        
+        context_parts.append(f"\nFound {len(results)} relevant Linear issues:")
+        
+        # Format Linear issues for context - exclude unnecessary data
+        for i, issue in enumerate(results, 1):
+            # Check if this is a standard issue or not
+            if isinstance(issue, dict) and "title" in issue:
+                # Standard issue format - only include essential information
+                issue_id = issue.get('issue_id', 'No ID')
+                context_parts.append(f"{i}. {issue.get('title', 'Untitled')} ({issue_id})")
+                
+                # Add basic information if available
+                assignee = issue.get('assignee', '')
+                if assignee:
+                    context_parts.append(f"   Assignee: {assignee}")
+                
+                state = issue.get('state', '')
+                if state:
+                    context_parts.append(f"   State: {state}")
+                
+                priority = issue.get('priority', '')
+                if priority:
+                    context_parts.append(f"   Priority: {priority}")
+                
+                # Add any custom fields that were specifically requested in returned_fields
+                returned_fields = linear_results.get("search_parameters", {}).get("returned_fields", {})
+                if isinstance(returned_fields, dict):
+                    for key, display_name in returned_fields.items():
+                        if key not in ["title", "data->assignee->name", "data->state", "data->priority"] and key in issue:
+                            context_parts.append(f"   {display_name}: {issue[key]}")
+                
+                context_parts.append("--------------------------------")
+            else:
+                # Non-standard format, just output as is
+                context_parts.append(f"{i}. {issue}")
+        
+        return context_parts
+        
+    return context_parts
+
+def get_slack_users_list():
+    """
+    Get the list of all users in the Slack workspace.
+    """
+    try:
+        valid_users = []
+        response = slack_client.users_list()
+        members = response.get("members")
+        for member in members:
+            if member.get("deleted") == False and member.get("is_bot") == False and member.get("is_email_confirmed") == True and member.get("is_primary_owner") == False:
+                valid_user = {
+                    "display_name": "",
+                    "real_name": "",
+                    "title": "",
+                    "team": ""
+                }
+                valid_user["display_name"] = member.get("profile", {}).get("display_name")
+                valid_user["real_name"] = member.get("profile", {}).get("real_name")
+                valid_user["title"] = member.get("profile", {}).get("title")
+                valid_user["team"] = member.get("team")
+                valid_users.append(valid_user)
+        return valid_users
+    except SlackApiError as e:
+        logger.error(f"Slack API error: {e}")
         return []
 
-def extract_images_from_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Extract image information from messages."""
-    images = []
-    
-    for msg in messages:
-        # Skip if message doesn't have files
-        if "files" not in msg:
-            continue
-            
-        # Look for image files
-        for file in msg["files"]:
-            # Check if file is an image
-            if file.get("mimetype", "").startswith("image/"):
-                # Add image with context
-                images.append({
-                    "url": file.get("url_private", ""),
-                    "title": file.get("title", "Image"),
-                    "from_user": msg.get("user", "Unknown"),
-                    "text": msg.get("text", ""),
-                    "ts": msg.get("ts", ""),
-                    "permalink": file.get("permalink", ""),
-                    "file_id": file.get("id", "")
-                })
-    
-    return images
-
-async def download_image_from_slack(image_url: str) -> Optional[bytes]:
+def get_linear_names():
     """
-    Download an image from Slack with the proper authorization.
-    Returns the image bytes that can be sent to OpenAI.
+    Get the list of all users in the Linear workspace.
     """
-    logger.info(f"Downloading image from Slack: {image_url[:50]}...")
-    
-    try:
-        headers = {
-            "Authorization": f"Bearer {SLACK_BOT_TOKEN}"
+    linear_users = []
+    raw_list =  [
+            "@agustin: agustin@tokenmetrics.com: MKT",
+            "@ahmedhamdy: Ahmed Hamdy: AI",
+            "@andrew: Andrew Tran: AI",
+            "@ankit: Dao Truong An: ENG",
+            "@ashutosh: Ashutosh: ENG",
+            "@ayo: Ayo: PRO",
+            "@ayush: Ayush Jalan",
+            "@bartosz: Bartosz Kusnierczak: ENG",
+            "@ben: Ben Diagi: PRO",
+            "@caleb: Caleb Nnamani: MKT",
+            "@chao: Chao Li: AI",
+            "@chetan: Chetan Kale",
+            "@divine: Divine Anthony: ENG",
+            "@faith: Faith Oladejo: PRO",
+            "@favour: Favour Ikwan: OPS",
+            "@grady: Grady Matthias Oktavian: AI",
+            "@harshg: Harsh Gautam: ENG",
+            "@hemank: Hemank Sharma",
+            "@ian: Ian Balina",
+            "@jake: Jake Nguyen: AI",
+            "@khadijah: khadijah@tokenmetrics.com: OPS",
+            "@manav: Manav Garg: ENG",
+            "@noel: Emanuel Cruz: MKT",
+            "@olaitan: Olaitan Akintunde: MKT",
+            "@ozcan: Ozcan Ilhan: ENG",
+            "@peterson: Peterson Nwoko: ENG",
+            "@phat: Phát -: OPS",
+            "@raldrich: Raldrich Oracion: PRO",
+            "@roshan1: Roshan Ganesh: MKT",
+            "@salman: Salman Haider",
+            "@sam: Sam Monac",
+            "@suleman: Suleman Tariq: ENG",
+            "@tafcirm: Tafcir Majumder: MKT",
+            "@talha: Talha Ahmad: OPS",
+            "@talhacagri: Talha Çağrı Kotcioglu: AI",
+            "@val: Valentine Enedah: PRO",
+            "@vasilis: Vasilis Kotopoulos: AI",
+            "@williams: Williams Cherechi: ENG",
+            "@zaiying: Zaiying Li: OPS"
+        ]
+    for user in raw_list:
+        linear_user = {
+            "username": "",
+            "real_name": "",
+            "team": ""  
         }
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.get(image_url, headers=headers) as response:
-                if response.status == 200:
-                    return await response.read()
-                else:
-                    logger.error(f"Failed to download image from Slack: {response.status}")
-                    return None
-    except Exception as e:
-        logger.error(f"Error downloading image from Slack: {str(e)}")
-        return None
-
-async def prepare_image_for_openai(image_url: str) -> Optional[Dict[str, str]]:
-    """
-    Prepare an image from Slack for sending to OpenAI.
-    Downloads the image and converts it to a base64 encoded string.
-    """
-    try:
-        # Download the image
-        image_bytes = await download_image_from_slack(image_url)
-        if not image_bytes:
-            return None
-            
-        # Encode as base64
-        base64_image = base64.b64encode(image_bytes).decode("utf-8")
-        
-        # Return properly formatted for OpenAI
-        return {
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:image/jpeg;base64,{base64_image}",
-                "detail": "high"
-            }
-        }
-    except Exception as e:
-        logger.error(f"Error preparing image for OpenAI: {str(e)}")
-        return None
-
-async def delete_animation_messages(message_timestamps):
-    """Delete animation messages from Slack."""
-    logger.info(f"Deleting {len(message_timestamps)} animation messages")
-    
-    try:
-        for channel_id, ts in message_timestamps:
-            if channel_id and ts:
-                try:
-                    # Delete the message
-                    slack_client.chat_delete(
-                        channel=channel_id,
-                        ts=ts
-                    )
-                    logger.info(f"Deleted message with ts: {ts}")
-                except SlackApiError as e:
-                    logger.error(f"Error deleting message: {e.response['error']}")
-    except Exception as e:
-        logger.error(f"Error in delete_animation_messages: {str(e)}")
-
-# Load prompts from YAML file
-try:
-    with open('prompts.yaml', 'r', encoding='utf-8') as file:
-        PROMPTS = yaml.safe_load(file)
-    logger.info("Successfully loaded prompts from prompts.yaml")
-except Exception as e:
-    logger.error(f"Error loading prompts: {str(e)}")
-    # Fallback to empty dict
-    PROMPTS = {}
+        linear_user["username"] = user.split(":")[0].strip()
+        linear_user["real_name"] = user.split(":")[1].strip()
+        if len(user.split(":")) > 2:
+            linear_user["team"] = user.split(":")[2].strip()
+        else:
+            linear_user["team"] = None
+        linear_users.append(linear_user)
+    return linear_users
 
 if __name__ == "__main__":
-    logger.info("Starting AI Bot server")
     uvicorn.run(app, host="0.0.0.0", port=8000)
-

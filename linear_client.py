@@ -3,9 +3,13 @@ import os
 from typing import Optional, Dict, Any, List
 import logging
 import datetime
-from datetime import timedelta
+from datetime import timedelta, datetime
 import json
 import traceback
+import dotenv
+import asyncio
+
+dotenv.load_dotenv()
 
 logger = logging.getLogger("linear_client")
 
@@ -31,6 +35,24 @@ class LinearTeam:
         self.key = data.get("key", "")
         self.description = data.get("description", "")
         self.members_count = data.get("members", {}).get("count", 0) if data.get("members") else 0
+    
+    def __str__(self) -> str:
+        """String representation of the team."""
+        return f"Team: {self.name} (Key: {self.key})"
+    
+    def __repr__(self) -> str:
+        """Detailed representation of the team."""
+        return f"LinearTeam(name='{self.name}', key='{self.key}', members={self.members_count})"
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert team object to dictionary."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "key": self.key,
+            "description": self.description,
+            "members_count": self.members_count
+        }
 
 class LinearUser:
     def __init__(self, data: Dict[str, Any]):
@@ -41,6 +63,22 @@ class LinearUser:
         self.active = data.get("active", True)
         self.admin = data.get("admin", False)
         self.teams = [team for team in data.get("teams", {}).get("nodes", [])] if data.get("teams") else []
+    
+    def __str__(self) -> str:
+        """String representation of the user."""
+        return f"User: {self.name} ({self.display_name})"
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert user object to dictionary."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "email": self.email,
+            "display_name": self.display_name,
+            "active": self.active,
+            "admin": self.admin,
+            "teams": [team.get("key") for team in self.teams] if self.teams else []
+        }
 
 class LinearWorkItem:
     def __init__(self, data: Dict[str, Any]):
@@ -716,6 +754,7 @@ class LinearClient:
                         issues(first: $first, after: $after) {
                           nodes {
                             id
+                            number
                             title
                             description
                             state {
@@ -899,8 +938,16 @@ class LinearClient:
                     "created_at": comment.get("createdAt", "")
                 })
         
+        # Get team key and issue number
+        team_key = issue.get("team", {}).get("key", "")
+        issue_number = issue.get("number", 0)
+        
+        # Format ID as team_key-number if both are available
+        issue_id = f"{team_key}-{issue_number}" if team_key and issue_number else issue.get("id", "")
+        
         return {
-            "id": issue.get("id"),
+            "id": issue_id,
+            "number": issue_number,  # Include the raw number for reference
             "title": issue.get("title"),
             "description": issue.get("description"),
             "state": issue.get("state", {}).get("name") if issue.get("state") else "",
@@ -918,7 +965,7 @@ class LinearClient:
             "team": {
                 "id": issue.get("team", {}).get("id") if issue.get("team") else "",
                 "name": issue.get("team", {}).get("name") if issue.get("team") else "",
-                "key": issue.get("team", {}).get("key") if issue.get("team") else ""
+                "key": team_key
             },
             "comments": comments,  # Use our safely processed comments
             "labels": [{"name": label.get("name"), "color": label.get("color")} 
@@ -998,7 +1045,7 @@ class LinearClient:
             
             team_id = team_data[0]["id"]
             
-            # Build query to get both active cycle and recent past cycles
+            # Build query to get both active cycle and recent cycles with issue information
             query = """
             query TeamCycles($teamId: String!, $first: Int!) {
               team(id: $teamId) {
@@ -1013,9 +1060,14 @@ class LinearClient:
                   endsAt
                   completedAt
                   progress
+                  issues {
+                    nodes {
+                      id
+                    }
+                  }
                 }
-                # Get historical completed cycles
-                cycles(first: $first, filter: {completedAt: {neq: null}}) {
+                # Get recent cycles 
+                cycles(first: $first) {
                   nodes {
                     id
                     name
@@ -1024,6 +1076,11 @@ class LinearClient:
                     endsAt
                     completedAt
                     progress
+                    issues {
+                      nodes {
+                        id
+                      }
+                    }
                   }
                 }
               }
@@ -1032,7 +1089,7 @@ class LinearClient:
             
             variables = {
                 "teamId": team_id,
-                "first": limit
+                "first": 20  # Request more cycles than needed
             }
             
             response = requests.post(
@@ -1052,9 +1109,50 @@ class LinearClient:
                 return {"error": f"Team not found: {team_key}"}
             
             active_cycle = team_data.get("activeCycle", {})
-            recent_cycles = team_data.get("cycles", {}).get("nodes", [])
+            all_cycles = team_data.get("cycles", {}).get("nodes", [])
             
-            self.logger.info(f"Retrieved {len(recent_cycles)} historical cycles for team {team_key}")
+            # Calculate issue counts for each cycle
+            if active_cycle:
+                issue_nodes = active_cycle.get("issues", {}).get("nodes", [])
+                active_cycle["issue_count"] = len(issue_nodes)
+            
+            for cycle in all_cycles:
+                issue_nodes = cycle.get("issues", {}).get("nodes", [])
+                cycle["issue_count"] = len(issue_nodes)
+            
+            # Sort cycles by number (highest first)
+            all_cycles.sort(key=lambda c: c.get("number", 0), reverse=True)
+            
+            # Filter out the active cycle from all cycles to avoid duplication
+            if active_cycle and active_cycle.get("id"):
+                active_id = active_cycle.get("id")
+                all_cycles = [cycle for cycle in all_cycles if cycle.get("id") != active_id]
+            
+            # Only keep cycles that have issues
+            # Ignore future cycles
+            current_date = datetime.now().isoformat()
+            valid_cycles = []
+            
+            for cycle in all_cycles:
+                # Check if cycle has issues
+                issue_count = cycle.get("issue_count", 0)
+                
+                # Check if cycle start date is not in the future
+                has_start_date = bool(cycle.get("startsAt", ""))
+                start_not_in_future = not has_start_date or cycle.get("startsAt", "") <= current_date
+                
+                if issue_count > 0 and start_not_in_future:
+                    valid_cycles.append(cycle)
+            
+            # Add the active cycle if it has issues
+            if active_cycle and active_cycle.get("issue_count", 0) > 0:
+                valid_cycles.insert(0, active_cycle)
+                
+            # Limit to the requested number of cycles
+            recent_cycles = valid_cycles[:limit] if len(valid_cycles) > limit else valid_cycles
+            
+            self.logger.info(f"Retrieved {len(recent_cycles)} valid cycles for team {team_key}")
+            self.logger.info(f"Cycle numbers: {[c.get('number', 0) for c in recent_cycles]}")
             
             # Process and return the data
             return {
@@ -1064,8 +1162,8 @@ class LinearClient:
                     "key": team_data.get("key")
                 },
                 "active_cycle": active_cycle if active_cycle else None,
-                "recent_cycles": recent_cycles,
-                "cycles_count": len(recent_cycles)
+                "recent_cycles": recent_cycles[1:] if active_cycle else recent_cycles,  # Remove active cycle from recent cycles
+                "cycles_count": len(recent_cycles) - (1 if active_cycle else 0)
             }
                 
         except Exception as e:
@@ -1108,3 +1206,193 @@ class LinearClient:
         self.logger.info(f"Successfully retrieved data for {len(results)} out of {len(cycles_info)} cycles")
         return results
         
+
+    async def create_linear_issue(self, title: str, description: str, assignee_name: str = None, team_key: str = None, priority: int = None) -> Dict[str, Any]:
+        """
+        Create a new Linear issue with the specified parameters.
+        """
+        try:
+            # First, get the team ID if team_key is provided
+            team_id = None
+            if team_key:
+                team_query = """
+                query TeamByKey($teamKey: String!) {
+                  teams(filter: {key: {eq: $teamKey}}) {
+                    nodes {
+                      id
+                      states {
+                        nodes {
+                          id
+                          name
+                          type
+                        }
+                      }
+                    }
+                  }
+                }
+                """
+                team_response = requests.post(
+                    self.api_url,
+                    json={"query": team_query, "variables": {"teamKey": team_key}},
+                    headers=self.headers
+                )
+                
+                team_data = team_response.json().get("data", {}).get("teams", {}).get("nodes", [])
+                if team_data:
+                    team_id = team_data[0]["id"]
+                    # Get the "Todo" state ID from the team's states
+                    states = team_data[0].get("states", {}).get("nodes", [])
+                    todo_state = next((state for state in states if state["name"] == "Todo"), None)
+                    if todo_state:
+                        state_id = todo_state["id"]
+                    else:
+                        return {"error": "Could not find 'Todo' state for the team"}
+                else:
+                    return {"error": f"Team with key '{team_key}' not found"}
+            else:
+                return {"error": "team_key is required to create an issue"}
+
+            # Get assignee ID if provided
+            assignee_id = None
+            if assignee_name:
+                assignee_name = assignee_name.lstrip('@')
+                user_query = """
+                query UserByName($name: String!) {
+                  users(filter: {name: {eq: $name}}) {
+                    nodes {
+                      id
+                    }
+                  }
+                }
+                """
+                user_response = requests.post(
+                    self.api_url,
+                    json={"query": user_query, "variables": {"name": assignee_name}},
+                    headers=self.headers
+                )
+                
+                user_data = user_response.json().get("data", {}).get("users", {}).get("nodes", [])
+                if user_data:
+                    assignee_id = user_data[0]["id"]
+                else:
+                    return {"error": f"User '{assignee_name}' not found"}
+
+            # Create the mutation query
+            mutation = """
+            mutation CreateIssue($input: IssueCreateInput!) {
+              issueCreate(input: $input) {
+                success
+                issue {
+                  id
+                  identifier
+                  title
+                  url
+                }
+              }
+            }
+            """
+
+            # Prepare input variables
+            input_vars = {
+                "title": title,
+                "description": description,
+                "teamId": team_id,
+                "priority": priority if priority is not None else 0,
+                "stateId": state_id  # Use stateId instead of state object
+            }
+            
+            # Only add assigneeId if we have one
+            if assignee_id:
+                input_vars["assigneeId"] = assignee_id
+
+            variables = {
+                "input": input_vars
+            }
+
+            # Create the issue
+            response = requests.post(
+                self.api_url,
+                json={"query": mutation, "variables": variables},
+                headers=self.headers
+            )
+
+            if response.status_code != 200:
+                return {"error": f"API request failed: {response.text}"}
+
+            data = response.json()
+            
+            if "errors" in data:
+                return {"error": data["errors"][0]["message"]}
+
+            result = data.get("data", {}).get("issueCreate", {})
+            if result.get("success"):
+                issue = result.get("issue", {})
+                return {
+                    "success": True,
+                    "issue": {
+                        "id": issue.get("id"),
+                        "identifier": issue.get("identifier"),
+                        "title": issue.get("title"),
+                        "url": issue.get("url"),
+                        "assignee": assignee_name if assignee_name else None,
+                        "team": team_key if team_key else None,
+                        "priority": priority
+                    }
+                }
+            else:
+                return {"error": "Failed to create issue"}
+
+        except Exception as e:
+            self.logger.error(f"Error creating Linear issue: {str(e)}")
+            return {"error": f"Error creating issue: {str(e)}"}
+    
+if __name__ == "__main__":
+    async def run_tests():
+        client = LinearClient(api_key=os.getenv('LINEAR_API_KEY'))
+
+        # Test getting all users
+        print("\nFetching all Linear users:")
+        print("=" * 50)
+        users = client.get_all_users()
+        if users:
+            print(f"Found {len(users)} users:")
+            for user in users:
+                print("\nUser Details:")
+                print(f"Name: {user.name}")
+                print(f"Display Name: {user.display_name}")
+                print(f"Email: {user.email}")
+                print(f"Active: {'Yes' if user.active else 'No'}")
+                print(f"Teams: {', '.join([team.get('key', 'Unknown') for team in user.teams])}")
+                print("-" * 30)
+        else:
+            print("❌ No users found or error occurred")
+        
+        print("\n" + "=" * 50)
+
+        # Test issue creation
+        print("\nTesting issue creation:")
+        print("=" * 50)
+        test_issue = await client.create_linear_issue(
+            title="Test Issue from API Client",
+            description="This is a test issue created via the Linear API client",
+            assignee_name="Phát -",
+            team_key="OPS",
+            priority=2
+        )
+        
+        if test_issue.get("success"):
+            issue = test_issue["issue"]
+            print(f"✅ Issue created successfully!")
+            print(f"Identifier: {issue['identifier']}")
+            print(f"Title: {issue['title']}")
+            print(f"URL: {issue['url']}")
+            print(f"Assigned to: {issue['assignee']}")
+            print(f"Team: {issue['team']}")
+            print(f"Priority: {issue['priority']}")
+        else:
+            print(f"❌ Failed to create issue: {test_issue.get('error')}")
+        
+        print("=" * 50)
+    # Run the async function
+    asyncio.run(run_tests())
+    
