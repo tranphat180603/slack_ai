@@ -151,23 +151,6 @@ def main():
     results_2b = advanced_search(battle_2b)
     display_results(results_2b, "Semantic Search + SQL Filters (Data API + Harsh + Cycle 41)")
 
-    # Test Case 1: Find issues of an employee
-    test_case_1 = {
-    "fields": ["title", "state", "priority", "assignee->name", "description"],
-    "returned_fields": {
-        "Title": "title",
-        "State": "state",
-        "Priority": "priority",
-        "Assignee Name": "assignee->name",
-    },
-    "filters": [
-        {"field": "assignee->name", "operator": "=", "value": "Dao Truong An"},
-        {"field": "cycle->name", "operator": "=", "value": "Cycle 41"}
-    ],
-    "sorting": {"field": "priority", "direction": "ASC"},  # Show urgent (1) first
-    "limit": 1
-    }
-
     test_case_2 = {
     "fields": [
         "id",
