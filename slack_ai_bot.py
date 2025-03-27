@@ -2252,32 +2252,19 @@ async def stream_ai_response(context: str, history_context: str, ai_request: AIR
             logger.warning("Slack API rate limit exceeded for message posting, waiting...")
             slack_limiter.wait_if_needed()
         
-        # Create a new message in the thread for the actual response
+        # Create initial message
         initial_response = slack_client.chat_postMessage(
             channel=ai_request.channel_id,
             thread_ts=thread_ts,
-            text="..."
+            text="..."  # Will be updated with content
         )
-        response_message_ts = initial_response["ts"]
+        current_message_ts = initial_response["ts"]
         
         buffer = ""
         last_update_time = time.time()
         first_chunk = True
         current_part = ""
-        current_message_ts = response_message_ts
         part_number = 1
-        
-        # Initialize the first message
-        try:
-            initial_message = slack_client.chat_postMessage(
-                channel=ai_request.channel_id,
-                thread_ts=thread_ts,
-                text=f"Part {part_number}:"
-            )
-            current_message_ts = initial_message["ts"]
-        except SlackApiError as e:
-            logger.warning(f"Failed to create initial message: {e.response.get('error', '')}")
-            return None
         
         for chunk in stream:
             current_time = time.time()
@@ -2286,6 +2273,7 @@ async def stream_ai_response(context: str, history_context: str, ai_request: AIR
                 content = chunk.choices[0].delta.content
                 full_response += content
                 current_part += content
+                buffer += content
                 
                 # Delete the acknowledge message as soon as we receive first chunk
                 if first_chunk:
@@ -2324,26 +2312,51 @@ async def stream_ai_response(context: str, history_context: str, ai_request: AIR
                     except SlackApiError as e:
                         logger.warning(f"Failed to create new message part: {e.response.get('error', '')}")
                 
-                # Post the new chunk when buffer is full or time has elapsed
-                if len(current_part) > 1000 or current_time - last_update_time > 5.0:
+                # Update message when buffer is full or time has elapsed
+                if len(buffer) > 1000 or current_time - last_update_time > 2.0:
                     try:
                         if not slack_limiter.check_rate_limit():
                             logger.warning("Slack API rate limit exceeded for message update, waiting...")
-                            await asyncio.sleep(2)
+                            await asyncio.sleep(1)
                         
-                        # Post the new chunk as a reply in the thread
-                        slack_client.chat_postMessage(
+                        # Update the current message with accumulated part
+                        formatted_text = format_for_slack(current_part)
+                        if part_number > 1:
+                            formatted_text = f"Part {part_number}:\n{formatted_text}"
+                            
+                        slack_client.chat_update(
                             channel=ai_request.channel_id,
-                            thread_ts=thread_ts,
-                            text=content
+                            ts=current_message_ts,
+                            text=formatted_text
                         )
                         
+                        buffer = ""
                         last_update_time = current_time
                     except SlackApiError as e:
-                        logger.warning(f"Failed to post message chunk: {e.response.get('error', '')}")
+                        logger.warning(f"Failed to update streaming message: {e.response.get('error', '')}")
+        
+        # Send final update if there's anything in the buffer
+        if buffer:
+            try:
+                if not slack_limiter.check_rate_limit():
+                    logger.warning("Slack API rate limit exceeded for final update, waiting...")
+                    await asyncio.sleep(1)
+                
+                # Final update with any remaining content
+                formatted_text = format_for_slack(current_part)
+                if part_number > 1:
+                    formatted_text = f"Part {part_number}:\n{formatted_text}"
+                    
+                slack_client.chat_update(
+                    channel=ai_request.channel_id,
+                    ts=current_message_ts,
+                    text=formatted_text
+                )
+            except SlackApiError as e:
+                logger.warning(f"Failed to send final update: {e.response.get('error', '')}")
         
         # Store the complete response in conversation history
-        add_message_to_conversation(conversation_key, "assistant", full_response, response_message_ts)
+        add_message_to_conversation(conversation_key, "assistant", full_response, current_message_ts)
         
         return full_response
         
