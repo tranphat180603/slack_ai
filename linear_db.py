@@ -23,6 +23,7 @@ import time
 import schedule
 from datetime import datetime
 from dotenv import load_dotenv
+import psycopg2
 
 # Import functionality from existing modules
 # We use import statements rather than subprocess to maintain proper error handling
@@ -202,25 +203,48 @@ def run_linear_data_generation():
         return False
 
 def clear_database_tables():
-    """Clear issues table and non-embedding data from embeddings table."""
+    """Clear issues table and properly manage embeddings to prevent orphaned records."""
     logger.info("Clearing existing data from database tables...")
     try:
         with linear_rag_db_create.get_db_connection() as conn:
             with conn.cursor() as cur:
-                # First, clear the foreign key references in embeddings_simplified
+                # STEP 1: Store Linear IDs in a temporary column before clearing data
                 cur.execute("""
-                    UPDATE embeddings_simplified 
-                    SET 
-                        content = NULL,
-                        data = NULL,
-                        issue_id = NULL
+                ALTER TABLE embeddings_simplified 
+                ADD COLUMN IF NOT EXISTS linear_issue_id TEXT
                 """)
                 
-                # Then truncate the issues table
-                cur.execute("TRUNCATE TABLE issues_simplified CASCADE")
+                # Save Linear IDs from the data JSON before clearing
+                cur.execute("""
+                UPDATE embeddings_simplified
+                SET linear_issue_id = data->>'id'
+                WHERE data->>'id' IS NOT NULL
+                """)
+                
+                # STEP 2: Temporarily break foreign key constraint
+                cur.execute("ALTER TABLE embeddings_simplified DROP CONSTRAINT IF EXISTS embeddings_simplified_issue_id_fkey")
+                
+                # STEP 3: Clear data but preserve embeddings column
+                cur.execute("""
+                UPDATE embeddings_simplified 
+                SET 
+                    content = '',
+                    data = '{}',
+                    issue_id = NULL
+                """)
+                
+                # STEP 4: Truncate issues table without cascade
+                cur.execute("TRUNCATE TABLE issues_simplified")
+                
+                # STEP 5: Reestablish foreign key constraint
+                cur.execute("""
+                ALTER TABLE embeddings_simplified 
+                ADD CONSTRAINT embeddings_simplified_issue_id_fkey 
+                FOREIGN KEY (issue_id) REFERENCES issues_simplified(id)
+                """)
                 
                 conn.commit()
-                logger.info("Successfully cleared tables while preserving embeddings")
+                logger.info("Successfully cleared tables while preserving embedding connections")
                 return True
     except Exception as e:
         logger.error(f"Error clearing tables: {str(e)}")
@@ -328,31 +352,60 @@ def update_full_context_in_database():
         return False
 
 def update_embeddings_data():
-    """Update the data field in embeddings_simplified table to match issues_simplified."""
+    """Update embeddings data and remove orphaned records."""
     logger.info("Updating data field in embeddings_simplified table...")
     try:
         with linear_rag_db_create.get_db_connection() as conn:
             with conn.cursor() as cur:
-                # First, restore issue_id relationships by matching Linear IDs
+                # STEP 1: Keep track of how many embeddings we have initially
+                cur.execute("SELECT COUNT(*) FROM embeddings_simplified")
+                initial_count = cur.fetchone()[0]
+                logger.info(f"Initial embeddings count: {initial_count}")
+                
+                # STEP 2: Reconnect embeddings to issues using the preserved Linear ID
                 cur.execute("""
-                    UPDATE embeddings_simplified e
-                    SET 
-                        issue_id = i.id,
-                        data = i.data,
-                        content = CONCAT(
-                            'Title: ',
-                            i.data->>'title',
-                            E'\n\nDescription:\n',
-                            COALESCE(i.data->>'description', '')
-                        )
-                    FROM issues_simplified i
-                    WHERE (e.data->>'id')::text = (i.data->>'id')::text
+                UPDATE embeddings_simplified e
+                SET 
+                    issue_id = i.id,
+                    data = i.data,
+                    content = CONCAT(
+                        'Title: ',
+                        i.data->>'title',
+                        E'\n\nDescription:\n',
+                        COALESCE(i.data->>'description', '')
+                    )
+                FROM issues_simplified i
+                WHERE e.linear_issue_id = i.data->>'id'
                 """)
                 
-                # Log how many rows were updated
+                # STEP 3: Count reconnected embeddings
                 cur.execute("SELECT COUNT(*) FROM embeddings_simplified WHERE issue_id IS NOT NULL")
-                count = cur.fetchone()[0]
-                logger.info(f"Updated {count} rows in embeddings_simplified")
+                reconnected_count = cur.fetchone()[0]
+                logger.info(f"Successfully reconnected {reconnected_count} embeddings to issues")
+                
+                # STEP 4: Delete orphaned embeddings that couldn't be matched
+                cur.execute("DELETE FROM embeddings_simplified WHERE issue_id IS NULL")
+                
+                # STEP 5: Report how many orphaned embeddings were removed
+                deleted_count = initial_count - reconnected_count
+                logger.info(f"Removed {deleted_count} orphaned embeddings without matching issues")
+                
+                # STEP 6: Verify we now have exact 1:1 relationship
+                cur.execute("""
+                SELECT 
+                    (SELECT COUNT(*) FROM issues_simplified) AS issue_count,
+                    (SELECT COUNT(*) FROM embeddings_simplified) AS embedding_count
+                """)
+                counts = cur.fetchone()
+                issue_count, embedding_count = counts[0], counts[1]
+                
+                if issue_count != embedding_count:
+                    logger.warning(f"Coverage mismatch: {issue_count} issues vs {embedding_count} embeddings")
+                else:
+                    logger.info(f"Perfect 1:1 coverage: {issue_count} issues and embeddings")
+                
+                # STEP 7: Drop the temporary column we added
+                cur.execute("ALTER TABLE embeddings_simplified DROP COLUMN IF EXISTS linear_issue_id")
                 
                 conn.commit()
                 return True
@@ -442,6 +495,103 @@ def update_issue_references():
         logger.error(f"Error updating issue references: {str(e)}")
         return False
 
+def finalize_weekly_update():
+    """Add a final check after weekly update to ensure 1:1 relationship."""
+    logger.info("Performing final data integrity check...")
+    try:
+        with linear_rag_db_create.get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Count issues and embeddings
+                cur.execute("""
+                SELECT 
+                    (SELECT COUNT(*) FROM issues_simplified) AS issue_count,
+                    (SELECT COUNT(*) FROM embeddings_simplified) AS embedding_count
+                """)
+                counts = cur.fetchone()
+                issue_count, embedding_count = counts[0], counts[1]
+                
+                # If we have more embeddings than issues, something's wrong
+                if embedding_count > issue_count:
+                    # Find and delete extra embeddings
+                    cur.execute("""
+                    DELETE FROM embeddings_simplified
+                    WHERE issue_id IS NULL OR issue_id NOT IN (
+                        SELECT id FROM issues_simplified
+                    )
+                    """)
+                    
+                    # Report cleanup
+                    removed = embedding_count - issue_count
+                    logger.info(f"Removed {removed} orphaned embeddings in final check")
+                
+                # Final count
+                cur.execute("SELECT COUNT(*) FROM embeddings_simplified")
+                final_count = cur.fetchone()[0]
+                logger.info(f"Final embeddings count: {final_count}")
+                
+                conn.commit()
+                return True
+    except Exception as e:
+        logger.error(f"Error in final integrity check: {str(e)}")
+        return False
+
+def handle_new_issues_embeddings():
+    """Generate embeddings only for new issues without waiting for weekly update."""
+    logger.info("Checking for new issues that need embeddings...")
+    try:
+        with linear_rag_db_create.get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Find issues without embeddings
+                cur.execute("""
+                SELECT i.id, i.full_context
+                FROM issues_simplified i
+                LEFT JOIN embeddings_simplified e ON i.id = e.issue_id
+                WHERE e.id IS NULL
+                """)
+                
+                new_issues = cur.fetchall()
+                new_count = len(new_issues)
+                
+                if new_count == 0:
+                    logger.info("No new issues found that need embeddings")
+                    return True
+                
+                logger.info(f"Found {new_count} new issues that need embeddings")
+                
+                # Process these new issues (simplified approach)
+                # In a real implementation, you'd use the same embedding code from linear_rag_embeddings.py
+                for issue_id, full_context in new_issues:
+                    # Generate embedding (this is just a placeholder)
+                    # You would use the OpenAI API here like in your weekly update
+                    logger.info(f"Generating embedding for new issue {issue_id}")
+                    embedding = linear_rag_embeddings.get_embedding(full_context)
+                    
+                    # Insert the new embedding record
+                    cur.execute("""
+                    INSERT INTO embeddings_simplified (issue_id, embedding, content, data)
+                    SELECT 
+                       id, 
+                       (%s)::vector, 
+                       full_context,
+                       data
+                    FROM issues_simplified WHERE id = %s
+                    """, (embedding, issue_id))
+                
+                # After implementation, verify 1:1 relationship
+                cur.execute("""
+                SELECT 
+                    (SELECT COUNT(*) FROM issues_simplified) AS issue_count,
+                    (SELECT COUNT(*) FROM embeddings_simplified) AS embedding_count
+                """)
+                counts = cur.fetchone()
+                logger.info(f"Coverage after handling new issues: {counts[1]}/{counts[0]} issues have embeddings")
+                
+                conn.commit()
+                return True
+    except Exception as e:
+        logger.error(f"Error handling new issues: {str(e)}")
+        return False
+
 def run_daily_update():
     """Run the daily update task - clear and reimport data."""
     start_time = datetime.now()
@@ -477,6 +627,10 @@ def run_daily_update():
         logger.error("Failed to update embeddings data")
         return False
     
+    # NEW: Handle new issues by generating embeddings for them
+    if not handle_new_issues_embeddings():
+        logger.warning("Failed to handle new issues, they will be processed in the next weekly update")
+    
     end_time = datetime.now()
     duration = end_time - start_time
     logger.info(f"Daily update completed at {end_time}")
@@ -484,7 +638,7 @@ def run_daily_update():
     
     # Get database statistics
     db_stats = linear_rag_db_import.check_existing_data()
-    logger.info(f"Database now has {db_stats['issues_count']} issues")
+    logger.info(f"Embeddings Database now has {db_stats['embeddings_count']} issues")
     
     return True
 
@@ -502,6 +656,10 @@ def run_weekly_update():
     if not generate_embeddings():
         logger.error("Failed to generate embeddings")
         return False
+    
+    # NEW: Add final integrity check to ensure 1:1 ratio
+    if not finalize_weekly_update():
+        logger.warning("Integrity check failed, but continuing")
     
     end_time = datetime.now()
     duration = end_time - start_time

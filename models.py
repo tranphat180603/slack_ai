@@ -14,7 +14,7 @@ class Conversation(Base):
     thread_ts = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    metadata = Column(JSON, nullable=True)  # For storing any additional metadata
+    meta_data = Column(JSON, nullable=True)  # For storing any additional metadata
 
     # Relationship with messages
     messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan")
@@ -29,7 +29,7 @@ class Message(Base):
     content = Column(String, nullable=False)
     timestamp = Column(Float, nullable=False)
     message_ts = Column(String, nullable=True)  # Slack message timestamp
-    metadata = Column(JSON, nullable=True)  # For storing any additional metadata
+    meta_data = Column(JSON, nullable=True)  # For storing any additional metadata
 
     # Relationship with conversation
     conversation = relationship("Conversation", back_populates="messages")

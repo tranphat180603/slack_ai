@@ -7898,9 +7898,16 @@
         "priority": 2,
         "estimate": 2,
         "created_at": "2025-03-06T18:59:19.901Z",
-        "updated_at": "2025-03-14T11:35:25.581Z",
+        "updated_at": "2025-03-27T02:09:38.621Z",
         "completed_at": "2025-03-14T11:35:25.567Z",
-        "comments": [],
+        "comments": [
+          {
+            "id": "",
+            "body": "[https://docs.google.com/document/d/1H0h4zM0RxoWpmzAsNYhk8NmO1n1_1D_VKk2KoQdlTek/edit?tab=t.0](https://docs.google.com/document/d/1H0h4zM0RxoWpmzAsNYhk8NmO1n1_1D_VKk2KoQdlTek/edit?tab=t.0)",
+            "created_at": "2025-03-27T02:09:38.635Z",
+            "user": "Roshan Ganesh"
+          }
+        ],
         "children": []
       },
       "full_context": "Title: Promote the Token Metrics API- SMM Posts\n\nDescription:\nGoal: Create SMM posts for linkedin, insta and tiktok\n\n**Required Document:**\n\n[https://docs.google.com/document/d/1Re03PLvfMWLCVRALIfnyvXGTDZ7OERykpunfZ120eGA/edit?tab=t.0#heading=h.p2os8xfh3v2z](https://docs.google.com/document/d/1Re03PLvfMWLCVRALIfnyvXGTDZ7OERykpunfZ120eGA/edit?tab=t.0#heading=h.p2os8xfh3v2z)\n\n[https://docs.google.com/document/d/1ZfX3rY5Wbg-VK0ldsoJXD5HUBoVwmwDv5XAoPKyE68Y/edit?tab=t.0#heading=h.nv6ijivfsjc0](https://docs.google.com/document/d/1ZfX3rY5Wbg-VK0ldsoJXD5HUBoVwmwDv5XAoPKyE68Y/edit?tab=t.0#heading=h.nv6ijivfsjc0)\n\n[https://docs.google.com/document/d/1-2jggjqPa3UCnKYiM5PPbOIyNrMBv8sCI7oFWL-FtMg/edit?tab=t.0#heading=h.xtvur1gwiang](https://docs.google.com/document/d/1-2jggjqPa3UCnKYiM5PPbOIyNrMBv8sCI7oFWL-FtMg/edit?tab=t.0#heading=h.xtvur1gwiang)\n\nthese are some recommendations for the teasers posts for each campaign\n[https://docs.google.com/document/d/1pLJrsnTRu2NWyxziZ2iG21cQFZ6hK84GvCePeclspRE/edit?tab=t.0](https://docs.google.com/document/d/1pLJrsnTRu2NWyxziZ2iG21cQFZ6hK84GvCePeclspRE/edit?tab=t.0)"
@@ -18468,7 +18475,7 @@
         "priority": 1,
         "estimate": 1,
         "created_at": "2025-03-12T15:40:03.146Z",
-        "updated_at": "2025-03-17T15:45:25.688Z",
+        "updated_at": "2025-03-27T00:19:06.601Z",
         "completed_at": "2025-03-12T16:49:39.793Z",
         "comments": [
           {
@@ -18528,7 +18535,7 @@
         "priority": 1,
         "estimate": 2,
         "created_at": "2025-03-12T15:23:03.216Z",
-        "updated_at": "2025-03-12T15:23:04.033Z",
+        "updated_at": "2025-03-27T00:19:10.788Z",
         "completed_at": "2025-03-12T15:23:03.266Z",
         "comments": [
           {
@@ -18570,7 +18577,7 @@
         "priority": 1,
         "estimate": 1,
         "created_at": "2025-03-12T11:59:38.816Z",
-        "updated_at": "2025-03-12T16:44:52.752Z",
+        "updated_at": "2025-03-27T00:19:11.894Z",
         "completed_at": "2025-03-12T13:38:25.306Z",
         "comments": [
           {
@@ -18624,7 +18631,7 @@
         "priority": 0,
         "estimate": 2,
         "created_at": "2025-03-12T11:47:39.186Z",
-        "updated_at": "2025-03-12T20:02:33.369Z",
+        "updated_at": "2025-03-27T00:19:12.939Z",
         "completed_at": "2025-03-12T20:02:33.150Z",
         "comments": [
           {
@@ -18672,7 +18679,7 @@
         "priority": 2,
         "estimate": 2,
         "created_at": "2025-03-12T11:40:41.740Z",
-        "updated_at": "2025-03-14T21:00:08.287Z",
+        "updated_at": "2025-03-27T00:19:14.072Z",
         "completed_at": "2025-03-14T21:00:08.135Z",
         "comments": [
           {
@@ -18714,7 +18721,7 @@
         "priority": 1,
         "estimate": 3,
         "created_at": "2025-03-11T18:55:14.496Z",
-        "updated_at": "2025-03-11T20:14:50.941Z",
+        "updated_at": "2025-03-26T00:19:03.703Z",
         "completed_at": "2025-03-11T19:43:21.749Z",
         "comments": [
           {
@@ -18762,7 +18769,7 @@
         "priority": 1,
         "estimate": 2,
         "created_at": "2025-03-11T16:51:32.823Z",
-        "updated_at": "2025-03-11T17:32:46.839Z",
+        "updated_at": "2025-03-26T00:19:05.184Z",
         "completed_at": "2025-03-11T17:32:46.826Z",
         "comments": [
           {
@@ -18864,7 +18871,7 @@
         "priority": 1,
         "estimate": 3,
         "created_at": "2025-03-11T14:29:07.307Z",
-        "updated_at": "2025-03-11T15:54:29.431Z",
+        "updated_at": "2025-03-26T00:19:06.841Z",
         "completed_at": "2025-03-11T14:46:10.418Z",
         "comments": [
           {
@@ -18912,7 +18919,7 @@
         "priority": 2,
         "estimate": 2,
         "created_at": "2025-03-11T11:10:34.960Z",
-        "updated_at": "2025-03-19T00:46:53.640Z",
+        "updated_at": "2025-03-26T00:19:09.003Z",
         "completed_at": "2025-03-19T00:45:06.414Z",
         "comments": [
           {
@@ -18954,7 +18961,7 @@
         "priority": 2,
         "estimate": 2,
         "created_at": "2025-03-11T11:06:30.705Z",
-        "updated_at": "2025-03-14T22:40:55.226Z",
+        "updated_at": "2025-03-26T00:19:09.702Z",
         "completed_at": "2025-03-14T17:16:43.882Z",
         "comments": [
           {
@@ -19049,7 +19056,7 @@
         "priority": 1,
         "estimate": 1,
         "created_at": "2025-03-11T07:56:17.975Z",
-        "updated_at": "2025-03-17T15:45:26.363Z",
+        "updated_at": "2025-03-26T00:19:11.325Z",
         "completed_at": "2025-03-11T07:56:38.150Z",
         "comments": [
           {

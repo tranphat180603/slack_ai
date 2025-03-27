@@ -153,19 +153,19 @@ def main():
 
     # Test Case 1: Find issues of an employee
     test_case_1 = {
-        "fields": ["title", "state", "priority", "assignee->name", "description"],
-        "returned_fields": {
-            "Title": "title",
-            "State": "state",
-            "Priority": "priority",
-            "Assignee Name": "assignee->name",
-        },
-        "filters": [
-            {"field": "assignee->name", "operator": "=", "value": "Dao Truong An"},
-            {"field": "cycle->name", "operator": "=", "value": "Cycle 41"}
-        ],
-        "sorting": {"field": "priority", "direction": "ASC"},  # Show urgent (1) first
-        "limit": 1
+    "fields": ["title", "state", "priority", "assignee->name", "description"],
+    "returned_fields": {
+        "Title": "title",
+        "State": "state",
+        "Priority": "priority",
+        "Assignee Name": "assignee->name",
+    },
+    "filters": [
+        {"field": "assignee->name", "operator": "=", "value": "Dao Truong An"},
+        {"field": "cycle->name", "operator": "=", "value": "Cycle 41"}
+    ],
+    "sorting": {"field": "priority", "direction": "ASC"},  # Show urgent (1) first
+    "limit": 1
     }
 
     test_case_2 = {
@@ -303,63 +303,101 @@ def main():
     }
     
     # Test Case 4: Two-step query: first find teams with urgent issues, then get team details
-    test_case_4_multi = [
-    {
-        "fields": ["team->key"],
+    # test_case_4_multi = [
+    # {
+    #     "fields": ["team->key"],
+    #     "returned_fields": {
+    #     "Team Key": "group_field",
+    #     "Urgent Issues": "urgent_issues"
+    #     },
+    #     "grouping": "team->key",
+    #     "filters": [
+    #     {
+    #         "field": "priority", 
+    #         "operator": "=",
+    #         "value": 1
+    #     }
+    #     ],
+    #     "aggregations": [
+    #     {
+    #         "type": "count",
+    #         "field": "*",
+    #         "alias": "urgent_issues"
+    #     }
+    #     ],
+    #     "sorting": {
+    #     "field": "urgent_issues",
+    #     "direction": "DESC"
+    #     },
+    #     "limit": 5,
+    #     "result_variable": "urgent_teams"
+    # },
+    # {
+    #     "fields": ["title", "team->key", "state", "priority", "created_at"],
+    #     "returned_fields": {
+    #     "Title": "title",
+    #     "Team": "team->key",
+    #     "Status": "state",
+    #     "Priority": "priority"
+    #     },
+    #     "filters": [
+    #     {
+    #         "field": "team->key",
+    #         "operator": "= ANY",
+    #         "value": "{{urgent_teams.group_field}}"
+    #     },
+    #     {
+    #         "field": "priority",
+    #         "operator": "=",
+    #         "value": 1
+    #     }
+    #     ],
+    #     "distinct_on": "team->key",
+    #     "per_group_limit": 2,
+    #     "sorting": {
+    #     "field": "created_at",
+    #     "direction": "DESC"
+    #     },
+    #     "limit": 10
+    # }
+    # ]
+
+    test_case_4_multi =     [
+      {
+        "fields": ["assignee->name"],
         "returned_fields": {
-        "Team Key": "group_field",
-        "Urgent Issues": "urgent_issues"
+          "assignee": "group_field"
         },
-        "grouping": "team->key",
         "filters": [
-        {
-            "field": "priority", 
-            "operator": "=",
-            "value": 1
-        }
+          {"field": "team->key", "operator": "=", "value": "AI"},
+          {"field": "cycle->name", "operator": "=", "value": "Cycle 41"}
         ],
-        "aggregations": [
-        {
-            "type": "count",
-            "field": "*",
-            "alias": "urgent_issues"
-        }
-        ],
-        "sorting": {
-        "field": "urgent_issues",
-        "direction": "DESC"
-        },
-        "limit": 5,
-        "result_variable": "urgent_teams"
-    },
-    {
-        "fields": ["title", "team->key", "state", "priority", "created_at"],
+        "grouping": "assignee->name",
+        "limit": 20,
+        "result_variable": "ai_team_members",
+      },
+      {
+        "fields": ["title", "assignee->name", "state", "priority", "created_at"],
         "returned_fields": {
-        "Title": "title",
-        "Team": "team->key",
-        "Status": "state",
-        "Priority": "priority"
+          "title": "title",
+          "assignee": "assignee->name",
+          "state": "state",
+          "priority": "priority",
+          "created": "created_at"
         },
         "filters": [
-        {
-            "field": "team->key",
+          {"field": "cycle->name", "operator": "=", "value": "Cycle 41"},
+          {
+            "field": "assignee->name",
             "operator": "= ANY",
-            "value": "{{urgent_teams.group_field}}"
-        },
-        {
-            "field": "priority",
-            "operator": "=",
-            "value": 1
-        }
+            "value": "{{ai_team_members.assignee}}"
+          }
         ],
-        "distinct_on": "team->key",
         "per_group_limit": 2,
-        "sorting": {
-        "field": "created_at",
-        "direction": "DESC"
-        },
-        "limit": 10
-    }
+        "sorting": {"field": "priority", "direction": "ASC"},
+        "limit": 20,
+        "distinct_on": "assignee->name",
+      }
     ]
 
     
@@ -480,6 +518,150 @@ def main():
         import traceback
         logger.error(traceback.format_exc())
 
+    # # Test Case: Semantic search with grouping and aggregation (the problematic case)
+    # semantic_with_grouping = {
+    #     "fields": ["state"],
+    #     "returned_fields": {
+    #         "State": "group_field",
+    #         "Total Issues": "total_issues"
+    #     },
+    #     "semantic_search": "Indices for Token Metrics website",
+    #     "aggregations": [
+    #         {"type": "count", "field": "*", "alias": "total_issues"}
+    #     ],
+    #     "grouping": "state",
+    #     "limit": 10
+    # }
+    
+    # print("\nTest Case: Semantic Search with Grouping")
+    # print("This tests the combination that was causing errors")
+    # try:
+    #     results_semantic_grouping = advanced_search(semantic_with_grouping)
+    #     display_results(results_semantic_grouping, "Semantic Search with Grouping and Aggregation")
+    # except Exception as e:
+    #     logger.error(f"Error in semantic search with grouping test: {str(e)}")
+    #     import traceback
+    #     logger.error(traceback.format_exc())
+        
+    # # Try an alternative approach without semantic search
+    # print("\nTrying alternative approach - separate queries")
+    
+    # # First query - just get the states
+    # states_only = {
+    #     "fields": ["state"],
+    #     "returned_fields": {
+    #         "State": "group_field"
+    #     },
+    #     "grouping": "state",
+    #     "limit": 10,
+    #     "result_variable": "available_states"
+    # }
+    
+    # # Second query - semantic search for each state
+    # semantic_search_by_state = {
+    #     "fields": ["title", "state", "id"],
+    #     "returned_fields": {
+    #         "Title": "title",
+    #         "State": "state",
+    #         "ID": "id"
+    #     },
+    #     "semantic_search": "Indices for Token Metrics website",
+    #     "limit": 15
+    # }
+    
+    # Create a proper multi-step test case for semantic search with grouping
+    semantic_with_grouping_multi = [
+        # Step 1: Get all states
+        {
+            "fields": ["state"],
+            "returned_fields": {
+                "State": "group_field"
+            },
+            "grouping": "state",
+            "limit": 10,
+            "result_variable": "available_states"
+        },
+        # Step 2: Do semantic search and filter by states from step 1
+        {
+            "fields": ["title", "state", "id"],
+            "returned_fields": {
+                "Title": "title", 
+                "State": "state",
+                "ID": "id"
+            },
+            "semantic_search": "Indices for Token Metrics website",
+            "filters": [
+                {
+                    "field": "state",
+                    "operator": "= ANY",
+                    "value": "{{available_states.State}}"
+                }
+            ],
+            "limit": 15
+        }
+    ]
+    
+    print("\nTest Case: Multi-Step Semantic Search with Grouping")
+    print("This tests a workaround for the problematic case using proper multi-step approach")
+    
+    # Process the multi-step approach using the same pattern as other multi-step queries
+    try:
+        step_results = {}
+        final_results = None
+        
+        for i, step_query in enumerate(semantic_with_grouping_multi):
+            print(f"\nExecuting step {i+1} for multi-step semantic search...")
+            
+            # Extract the result_variable name if specified
+            result_variable = step_query.pop("result_variable", f"query_{i+1}_result")
+            
+            # Process any variable references in the query
+            processed_query = process_variable_references(step_query, step_results)
+            
+            # Execute the query
+            step_result = advanced_search(processed_query)
+            
+            # Store the results for use by subsequent queries
+            step_results[result_variable] = step_result.get("results", [])
+            
+            # The final step results will be displayed
+            if i == len(semantic_with_grouping_multi) - 1:
+                final_results = step_result
+        
+        display_results(final_results, "Multi-Step Semantic Search with States Filtering")
+        
+        # Post-process to show results grouped by state
+        if final_results and final_results.get("results"):
+            # Group results by state
+            grouped_results = {}
+            for item in final_results.get("results", []):
+                state = item.get("State")
+                if state not in grouped_results:
+                    grouped_results[state] = {
+                        "State": state,
+                        "Total Issues": 0,
+                        "Issues": []
+                    }
+                grouped_results[state]["Total Issues"] += 1
+                grouped_results[state]["Issues"].append(item["Title"])
+            
+            # Display grouped summary
+            print("\nPost-Processed Grouping Summary:")
+            for state, data in grouped_results.items():
+                print(f"State: {state} - Total Issues: {data['Total Issues']}")
+                if data["Issues"]:
+                    print("  Sample issues:")
+                    for i, title in enumerate(data["Issues"][:3]):  # Show up to 3 examples
+                        print(f"  - {title}")
+                    if len(data["Issues"]) > 3:
+                        print(f"  - ... and {len(data['Issues'])-3} more")
+        
+    except Exception as e:
+        logger.error(f"Error in multi-step approach: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+    
+
 def process_variable_references(query, step_results):
     """
     Process variable references in query values.
@@ -505,67 +687,29 @@ def process_variable_references(query, step_results):
                     # Extract variable reference
                     ref = filter_item["value"][2:-2].strip()  # Remove {{ }} and whitespace
                     
-                    # Handle field paths with -> notation 
+                    # Handle reference with or without a field name
                     if "." in ref:
                         var_name, field_name = ref.split(".", 1)
-                        logger.info(f"Processing variable reference: {var_name}.{field_name}")
                     else:
                         var_name, field_name = ref, None
-                        logger.info(f"Processing simple variable reference: {var_name}")
                     
                     if var_name in step_results:
-                        # Debug: print the structure of the first item in step_results
-                        if step_results[var_name] and len(step_results[var_name]) > 0:
-                            logger.info(f"First result item structure: {json.dumps(step_results[var_name][0], default=str)}")
+                        values = [item.get(field_name) for item in step_results[var_name] if field_name in item]
+                        values = [v for v in values if v is not None]  # Filter out None values
                         
-                        # Get all values from the field in previous results
-                        values = []
-                        for item in step_results[var_name]:
-                            if field_name:
-                                # For group_field reference, try both "group_field" and the actual field alias
-                                if field_name == "group_field":
-                                    # Try using "group_field" directly
-                                    if "group_field" in item and item["group_field"] is not None:
-                                        values.append(item["group_field"])
-                                    # Try finding the field by its alias (e.g., "Assignee")
-                                    else:
-                                        for key in item:
-                                            values.append(item[key])
-                                            break
-                                # Handle fields with -> notation
-                                elif "->" in field_name:
-                                    # Field name with -> notation needs special handling
-                                    field_parts = field_name.split("->")
-                                    value = item
-                                    for part in field_parts:
-                                        if isinstance(value, dict) and part in value:
-                                            value = value[part]
-                                        else:
-                                            value = None
-                                            break
-                                    if value is not None:
-                                        values.append(value)
-                                else:
-                                    # Simple field name
-                                    if field_name in item and item[field_name] is not None:
-                                        values.append(item[field_name])
-                            else:
-                                # If no field specified, use the whole item
-                                if item is not None:
-                                    values.append(item)
-                        
-                        logger.info(f"Found {len(values)} values for reference {ref}: {values}")
+                        # Debug the values
+                        logger.info(f"Values for {ref}: {values}")
                         
                         if values:
-                            # For ANY or IN operators, use the list of values
-                            if filter_item.get("operator", "=") in ["IN", "= ANY"]:
+                            # For = ANY operator, PostgreSQL expects an array
+                            if filter_item.get("operator", "=") in ["= ANY", "IN"]:
                                 processed_query["filters"][i]["value"] = values
-                            # For other operators, take the first value
-                            elif values:
+                            else:
+                                # For other operators, take the first value
                                 processed_query["filters"][i]["value"] = values[0]
                         else:
-                            # If no values found, remove this filter
-                            logger.warning(f"No values found for reference {ref}, will skip this filter")
+                            # If no values found, mark this filter for removal
+                            logger.warning(f"Empty value list for reference {ref}, will skip this filter")
                             filters_to_remove.append(i)
                     else:
                         logger.warning(f"Variable {var_name} not found in results, will skip this filter")

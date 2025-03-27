@@ -13,6 +13,7 @@ import traceback
 from db_pool import DatabasePool, get_db_connection
 import psycopg2
 from tenacity import retry, stop_after_attempt, wait_exponential
+import linear_rag_db_import
 
 load_dotenv()
 
@@ -153,7 +154,7 @@ def search_issues(
                     WHERE 1=1
                     AND i.data->>'title' NOT ILIKE %s
                     """
-                    params = ['%call%']
+                    params = ['%call%', '%meeting%']
                     
                     # Add filters if provided
                     if team_key:
@@ -938,6 +939,7 @@ def check_first_embedding():
         sql_query = """
         SELECT 
             e.issue_id,
+            e.embedding,
             e.content,
             e.data,
             i.full_context
@@ -952,7 +954,7 @@ def check_first_embedding():
         result = cur.fetchone()
         
         if result:
-            issue_id, content, data, full_context = result
+            issue_id, embedding, content, data, full_context = result
             print("\n========== First Entry in Embeddings Table ==========")
             print(f"Issue ID: {issue_id}")
             print(f"Content: {content[:200]}..." if content else "Content: None")
@@ -978,6 +980,8 @@ def main():
     try:
         # Check first embedding entry
         check_first_embedding()
+        result = linear_rag_db_import.check_existing_data()
+        print(f"embeddings row count: {result['embeddings_count']}")
         
         print("\nRunning test cases for advanced_search function...\n")
         
@@ -1121,9 +1125,9 @@ def main():
             "filters": [
                 {"field": "state", "operator": "!=", "value": "Done"}
             ],
-            "fields": ["title", "team->key", "state", "assignee->name"],
+            "fields": ["title", "team->key", "state", "assignee->name", "id"],
             "returned_fields": {
-                "ID": "issue_id",
+                "ID": "id",
                 "Title": "title",
                 "Team": "team->key",
                 "State": {"field": "state", "format": "capitalize"},
