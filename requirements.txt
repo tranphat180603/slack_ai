@@ -43,3 +43,4 @@ black>=23.3.0
 sqlalchemy==1.4.41
 alembic==1.8.1
 python-jose==3.3.0
+schedule==1.2.0
