@@ -551,13 +551,26 @@ def advanced_search(query_spec: Dict[str, Any]) -> Dict[str, Any]:
             "count": number of records in the results
             "results": list of dictionaries, each representing a row
     """
-    # Add default filter to exclude titles containing 'call'
-    filters = query_spec.get("filters", [])
-    filters.append({
+    # Manually filter out the meeting tickets from the results
+    filters = query_spec.get("filters", [])    
+    default_filters = [{
         "field": "title",
         "operator": "NOT ILIKE",
         "value": "%call%"
-    })
+    },
+    {
+        "field": "title",
+        "operator": "NOT ILIKE",
+        "value": "%meeting%"
+    },
+    {
+        "field": "title",
+        "operator": "NOT ILIKE",
+        "value": "%cadence%"
+    }]
+
+    filters.extend(default_filters)
+
     query_spec["filters"] = filters
     
     # Validate required parameters
@@ -929,6 +942,65 @@ def format_json_path_for_sql(path: str) -> str:
             return f"({result}->>'{last}')::integer"
         else:
             return f"{result}->>'{last}'"
+
+def process_variable_references(query, step_results):
+    """
+    Process variable references in query values.
+    
+    Args:
+        query: The query spec to process
+        step_results: Dictionary of previous query results
+        
+    Returns:
+        Processed query with variable references resolved
+    """
+    processed_query = json.loads(json.dumps(query))  # Deep copy
+    
+    # Process filters that might contain variable references
+    if "filters" in processed_query:
+        # Create a list to keep track of filters to remove (if their value lists are empty)
+        filters_to_remove = []
+        
+        for i, filter_item in enumerate(processed_query["filters"]):
+            if "value" in filter_item and isinstance(filter_item["value"], str):
+                # Check if this is a variable reference
+                if filter_item["value"].startswith("{{") and filter_item["value"].endswith("}}"):
+                    # Extract variable reference
+                    ref = filter_item["value"][2:-2].strip()  # Remove {{ }} and whitespace
+                    
+                    # Handle reference with or without a field name
+                    if "." in ref:
+                        var_name, field_name = ref.split(".", 1)
+                    else:
+                        var_name, field_name = ref, None
+                    
+                    if var_name in step_results:
+                        values = [item.get(field_name) for item in step_results[var_name] if field_name in item]
+                        values = [v for v in values if v is not None]  # Filter out None values
+                        
+                        # Debug the values
+                        logger.info(f"Values for {ref}: {values}")
+                        
+                        if values:
+                            # For = ANY operator, PostgreSQL expects an array
+                            if filter_item.get("operator", "=") in ["= ANY", "IN"]:
+                                processed_query["filters"][i]["value"] = values
+                            else:
+                                # For other operators, take the first value
+                                processed_query["filters"][i]["value"] = values[0]
+                        else:
+                            # If no values found, mark this filter for removal
+                            logger.warning(f"Empty value list for reference {ref}, will skip this filter")
+                            filters_to_remove.append(i)
+                    else:
+                        logger.warning(f"Variable {var_name} not found in results, will skip this filter")
+                        filters_to_remove.append(i)
+        
+        # Remove filters with empty value lists (in reverse order to avoid index shifting)
+        for i in sorted(filters_to_remove, reverse=True):
+            processed_query["filters"].pop(i)
+    
+    return processed_query
 
 def check_first_embedding():
     """Check the first entry in the embeddings_simplified table."""

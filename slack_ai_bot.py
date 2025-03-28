@@ -11,7 +11,6 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any, Union
 import tweepy
 from fastapi import HTTPException
-from dotenv import load_dotenv
 import openai
 import json
 from slack_sdk import WebClient
@@ -35,7 +34,7 @@ from models import Conversation, Message, Base
 from rate_limiter import global_limiter, slack_limiter, linear_limiter, openai_limiter
 from logging.handlers import RotatingFileHandler
 
-from test_linear_query import process_variable_references
+from linear_rag_search import process_variable_references
 
 # Configure logging
 logging.basicConfig(
@@ -118,52 +117,46 @@ conversation_history = defaultdict(list)
 CONVERSATION_EXPIRY = 24  # hours
 
 slack_users = [
-{'display_name': 'Talha', 'real_name': 'Talha Ahmad', 'title': 'Operations Manager', 'team': None},
-{'display_name': 'Val', 'real_name': 'Valentine Enedah', 'title': 'CX', 'team': None},
-{'display_name': 'Ian Balina', 'real_name': 'Ian Balina', 'title': 'Founder and CEO', 'team': None},
-{'display_name': 'Harsh', 'real_name': 'Harsh', 'title': 'Senior Full Stack Engineer', 'team': None},
-{'display_name': '', 'real_name': 'Andrew Tran', 'title': 'Data Engineer', 'team': None},
-{'display_name': 'Ayush Jalan', 'real_name': 'Ayush Jalan', 'title': 'Blockchain Engineer', 'team': None},
-{'display_name': 'Drich', 'real_name': 'Raldrich Oracion', 'title': 'Customer Success', 'team': None},
-{'display_name': 'Bartosz', 'real_name': 'Bartosz Kusnierczak', 'title': 'Passion never fail', 'team': None},
-{'display_name': 'Jake', 'real_name': 'Jake Nguyen', 'title': 'Senior Data Engineer', 'team': None},
-{'display_name': 'Roshan Ganesh', 'real_name': 'Roshan Ganesh', 'title': 'Marketing Lead', 'team': None},
-{'display_name': 'Sam Monac', 'real_name': 'Sam Monac', 'title': 'Chief Product Officer', 'team': None},
-{'display_name': 'Favour', 'real_name': 'Favour Ikwan', 'title': 'Chief Operations Officer', 'team': None},
-{'display_name': 'Suleman Tariq', 'real_name': 'Suleman Tariq', 'title': 'Tech Lead', 'team': None},
-{'display_name': 'Noel Cruz', 'real_name': 'Noel Cruz', 'title': '', 'team': None},
-{'display_name': 'Zaiying Li', 'real_name': 'Zaiying Li', 'title': '', 'team': None},
-{'display_name': 'Hemank', 'real_name': 'Hemank', 'title': '', 'team': None},
-{'display_name': 'Ben', 'real_name': 'Ben Diagi', 'title': 'Product Manager', 'team': None},
-{'display_name': 'Chao', 'real_name': 'Chao Li', 'title': 'Quantitative Analyst', 'team': None},
-{'display_name': 'Abdullah', 'real_name': 'Abdullah', 'title': 'Head Of Investment', 'team': None},
-{'display_name': 'Ugochukwu Nduaguba', 'real_name': 'Ugochukwu Nduaguba', 'title': '', 'team': None},
-{'display_name': 'Diego Lara', 'real_name': 'Diego Lara', 'title': '', 'team': None},
-{'display_name': 'Manav', 'real_name': 'Manav Garg', 'title': 'Blockchain Engineer', 'team': None},
-{'display_name': 'Vasilis', 'real_name': 'Vasilis Kotopoulos', 'title': 'AI Team Lead', 'team': None},
-{'display_name': 'Olaitan Akintunde', 'real_name': 'Olaitan Akintunde', 'title': 'Video Editor and Motion Designer', 'team': None},
-{'display_name': 'Chetan Kale', 'real_name': 'Chetan Kale', 'title': '', 'team': None},
-{'display_name': 'ayo', 'real_name': 'ayo', 'title': '', 'team': None},
-{'display_name': 'Özcan İlhan', 'real_name': 'Özcan İlhan', 'title': '', 'team': None},
-{'display_name': 'Faith Oladejo', 'real_name': 'Faith Oladejo', 'title': '', 'team': None},
-{'display_name': 'Taf', 'real_name': 'Tafcir Majumder', 'title': 'Head Of Business Development', 'team': None},
-{'display_name': 'Caleb N', 'real_name': 'Caleb', 'title': '', 'team': None},
-{'display_name': 'divine', 'real_name': 'Divine Anthony', 'title': 'Devops', 'team': None},
-{'display_name': 'Williams', 'real_name': 'Williams Williams', 'title': 'Senior Fullstack Engineer', 'team': None},
-{'display_name': 'Anki Truong', 'real_name': 'Truong An (Anki)', 'title': '', 'team': None},
-{'display_name': 'Ryan', 'real_name': 'Ryan Barcelona', 'title': 'Freelancer', 'team': None},
-{'display_name': 'Abdul Muneum', 'real_name': 'Abdul Muneum', 'title': '', 'team': None},
-{'display_name': 'Martin Muriithi', 'real_name': 'Martin Muriithi', 'title': '', 'team': None},
-{'display_name': '', 'real_name': 'Salman Haider', 'title': '', 'team': None},
-{'display_name': 'Phát -', 'real_name': 'Phát -', 'title': '', 'team': None},
-{'display_name': 'AhmedHamdy', 'real_name': 'AhmedHamdy', 'title': 'Senior Data Scientist/ML Engineer', 'team': None},
-{'display_name': 'Grady', 'real_name': 'Grady', 'title': 'Data Scientist/AI Engineer', 'team': None},
-{'display_name': 'Khadijah', 'real_name': 'Khadijah Shogbuyi', 'title': '', 'team': None},
-{'display_name': 'Talha Cagri', 'real_name': 'Talha Cagri Kotcioglu', 'title': 'Quantitative Analyst', 'team': None},
-{'display_name': '', 'real_name': 'Ashutosh Mishra', 'title': '', 'team': None},
-{'display_name': 'Agustín Gamoneda', 'real_name': 'Agustín Gamoneda', 'title': '', 'team': None},
-{'display_name': 'Peterson', 'real_name': 'Peterson Nwoko', 'title': 'Sr DevOps/SRE Engineer', 'team': None},
+    {'display_name': 'Talha', 'real_name': 'Talha Ahmad', 'title': 'Operations Manager', 'team': 'OPS'},
+    {'display_name': 'Val', 'real_name': 'Valentine Enedah', 'title': 'CX', 'team': 'PRO'},
+    {'display_name': 'Ian Balina', 'real_name': 'Ian Balina', 'title': 'Founder and CEO', 'team': None},
+    {'display_name': 'Harsh', 'real_name': 'Harsh', 'title': 'Senior Full Stack Engineer', 'team': 'ENG'},
+    {'display_name': '', 'real_name': 'Andrew Tran', 'title': 'Data Engineer', 'team': 'AI'},
+    {'display_name': 'Ayush Jalan', 'real_name': 'Ayush Jalan', 'title': 'Blockchain Engineer', 'team': 'ENG'},
+    {'display_name': 'Drich', 'real_name': 'Raldrich Oracion', 'title': 'Customer Success', 'team': 'PRO'},
+    {'display_name': 'Bartosz', 'real_name': 'Bartosz Kusnierczak', 'title': 'Passion never fail', 'team': 'ENG'},
+    {'display_name': 'Jake', 'real_name': 'Jake Nguyen', 'title': 'Senior Data Engineer', 'team': 'AI'},
+    {'display_name': 'Roshan Ganesh', 'real_name': 'Roshan Ganesh', 'title': 'Marketing Lead', 'team': 'MKT'},
+    {'display_name': 'Sam Monac', 'real_name': 'Sam Monac', 'title': 'Chief Product Officer', 'team': None},
+    {'display_name': 'Favour', 'real_name': 'Favour Ikwan', 'title': 'Chief Operations Officer', 'team': 'OPS'},
+    {'display_name': 'Suleman Tariq', 'real_name': 'Suleman Tariq', 'title': 'Tech Lead', 'team': 'ENG'},
+    {'display_name': 'Zaiying Li', 'real_name': 'Zaiying Li', 'title': '', 'team': 'OPS'},
+    {'display_name': 'Hemank', 'real_name': 'Hemank', 'title': '', 'team': 'RES'},
+    {'display_name': 'Ben', 'real_name': 'Ben Diagi', 'title': 'Product Manager', 'team': 'PRO'},
+    {'display_name': 'Chao', 'real_name': 'Chao Li', 'title': 'Quantitative Analyst', 'team': 'AI'},
+    {'display_name': 'Abdullah', 'real_name': 'Abdullah', 'title': 'Head Of Investment', 'team': 'RES'},
+    {'display_name': 'Manav', 'real_name': 'Manav Garg', 'title': 'Blockchain Engineer', 'team': 'RES'},
+    {'display_name': 'Vasilis', 'real_name': 'Vasilis Kotopoulos', 'title': 'AI Team Lead', 'team': 'AI'},
+    {'display_name': 'Olaitan Akintunde', 'real_name': 'Olaitan Akintunde', 'title': 'Video Editor and Motion Designer', 'team': 'MKT'},
+    {'display_name': 'Chetan Kale', 'real_name': 'Chetan Kale', 'title': '', 'team': 'RES'},
+    {'display_name': 'ayo', 'real_name': 'ayo', 'title': '', 'team': 'PRO'},
+    {'display_name': 'Özcan İlhan', 'real_name': 'Özcan İlhan', 'title': '', 'team': 'ENG'},
+    {'display_name': 'Faith Oladejo', 'real_name': 'Faith Oladejo', 'title': '', 'team': 'PRO'},
+    {'display_name': 'Taf', 'real_name': 'Tafcir Majumder', 'title': 'Head Of Business Development', 'team': 'MKT'},
+    {'display_name': 'Caleb N', 'real_name': 'Caleb', 'title': '', 'team': 'MKT'},
+    {'display_name': 'divine', 'real_name': 'Divine Anthony', 'title': 'Devops', 'team': 'ENG'},
+    {'display_name': 'Williams', 'real_name': 'Williams Williams', 'title': 'Senior Fullstack Engineer', 'team': 'ENG'},
+    {'display_name': 'Anki Truong', 'real_name': 'Truong An (Anki)', 'title': '', 'team': 'ENG'},
+    {'display_name': 'Ryan', 'real_name': 'Ryan Barcelona', 'title': 'Freelancer', 'team': 'MKT'},
+    {'display_name': 'Phát -', 'real_name': 'Phát -', 'title': '', 'team': 'OPS'},
+    {'display_name': 'AhmedHamdy', 'real_name': 'AhmedHamdy', 'title': 'Senior Data Scientist/ML Engineer', 'team': 'AI'},
+    {'display_name': 'Grady', 'real_name': 'Grady', 'title': 'Data Scientist/AI Engineer', 'team': 'AI'},
+    {'display_name': 'Khadijah', 'real_name': 'Khadijah Shogbuyi', 'title': '', 'team': 'OPS'},
+    {'display_name': 'Talha Cagri', 'real_name': 'Talha Cagri Kotcioglu', 'title': 'Quantitative Analyst', 'team': 'AI'},
+    {'display_name': 'Agustín Gamoneda', 'real_name': 'Agustín Gamoneda', 'title': '', 'team': 'MKT'},
+    {'display_name': 'Peterson', 'real_name': 'Peterson Nwoko', 'title': 'Sr DevOps/SRE Engineer', 'team': 'ENG'}
 ]
+
 
 app = fastapi.FastAPI()
 
@@ -183,6 +176,7 @@ class AIRequest(BaseModel):
     files: Optional[List[Dict[str, Any]]] = None  # Attached files
     urls: Optional[List[str]] = None  # URLs extracted from text
     message_ts: Optional[str] = None  # Message timestamp for reference
+    thread_ts: Optional[str] = None  # Thread timestamp for threading
 
 @dataclasses.dataclass
 class ContentAnalysisResult:
@@ -239,121 +233,971 @@ def ai_command(request: Request):
     return {"message": "AI command received"}
 #holding for now
 
-@app.post("/slack/events")
-async def slack_events(request: Request, background_tasks: BackgroundTasks):
+
+def get_slack_users_list():
     """
-    Handle Slack events, particularly app_mention events when the bot is tagged.
-    This endpoint processes mentions and responds similarly to the slash command.
+    Get the list of all users in the Slack workspace.
     """
-    # Get the raw request body first
-    body = await request.body()
-    text_body = body.decode('utf-8')
-    logger.info(f"Received raw body: {text_body[:200]}...")  # Log first 200 chars
+    try:
+        # Apply rate limiting for Slack API
+        if not slack_limiter.check_rate_limit():
+            logger.warning("Slack API rate limit exceeded, waiting...")
+            slack_limiter.wait_if_needed()
+        
+        response = slack_client.users_list()
+        members = response.get("members")
+        valid_users = []
+        for member in members:
+            if member.get("deleted") == False and member.get("is_bot") == False and member.get("is_email_confirmed") == True and member.get("is_primary_owner") == False:
+                valid_user = {
+                    "display_name": "",
+                    "real_name": "",
+                    "title": "",
+                    "team": ""
+                }
+                valid_user["display_name"] = member.get("profile", {}).get("display_name")
+                valid_user["real_name"] = member.get("profile", {}).get("real_name")
+                valid_user["title"] = member.get("profile", {}).get("title")
+                valid_user["team"] = member.get("team")
+                valid_users.append(valid_user)
+        return valid_users
+    except SlackApiError as e:
+        logger.error(f"Slack API error: {e}")
+        return []
+
+def get_linear_names():
+    """
+    Get the list of all users in the Linear workspace.
+    """
+    linear_users = []
+    raw_list =  [
+            "@agustin: agustin@tokenmetrics.com: MKT",
+            "@ahmedhamdy: Ahmed Hamdy: AI",
+            "@andrew: Andrew Tran: AI",
+            "@ankit: Dao Truong An: ENG",
+            "@ashutosh: Ashutosh: ENG",
+            "@ayo: Ayo: PRO",
+            "@ayush: Ayush Jalan",
+            "@bartosz: Bartosz Kusnierczak: ENG",
+            "@ben: Ben Diagi: PRO",
+            "@caleb: Caleb Nnamani: MKT",
+            "@chao: Chao Li: AI",
+            "@chetan: Chetan Kale",
+            "@divine: Divine Anthony: ENG",
+            "@faith: Faith Oladejo: PRO",
+            "@favour: Favour Ikwan: OPS",
+            "@grady: Grady Matthias Oktavian: AI",
+            "@harshg: Harsh Gautam: ENG",
+            "@hemank: Hemank Sharma",
+            "@ian: Ian Balina",
+            "@jake: Jake Nguyen: AI",
+            "@khadijah: khadijah@tokenmetrics.com: OPS",
+            "@manav: Manav Garg: ENG",
+            "@noel: Emanuel Cruz: MKT",
+            "@olaitan: Olaitan Akintunde: MKT",
+            "@ozcan: Ozcan Ilhan: ENG",
+            "@peterson: Peterson Nwoko: ENG",
+            "@phat: Phát -: OPS",
+            "@raldrich: Raldrich Oracion: PRO",
+            "@roshan1: Roshan Ganesh: MKT",
+            "@salman: Salman Haider",
+            "@sam: Sam Monac",
+            "@suleman: Suleman Tariq: ENG",
+            "@tafcirm: Tafcir Majumder: MKT",
+            "@talha: Talha Ahmad: OPS",
+            "@talhacagri: Talha Çağrı Kotcioglu: AI",
+            "@val: Valentine Enedah: PRO",
+            "@vasilis: Vasilis Kotopoulos: AI",
+            "@williams: Williams Cherechi: ENG",
+            "@zaiying: Zaiying Li: OPS"
+        ]
+    for user in raw_list:
+        linear_user = {
+            "username": "",
+            "real_name": "",
+            "team": ""  
+        }
+        linear_user["username"] = user.split(":")[0].strip()
+        linear_user["real_name"] = user.split(":")[1].strip()
+        if len(user.split(":")) > 2:
+            linear_user["team"] = user.split(":")[2].strip()
+        else:
+            linear_user["team"] = None
+        linear_users.append(linear_user)
+    return linear_users
+
+# Function to load conversation history from database
+def load_conversation_from_db(channel_id, thread_ts):
+    """Load conversation history from database"""
+    conversation_key = f"{channel_id}:{thread_ts}"
+    
+    # If found in memory cache
+    if conversation_key in conversation_history:
+        messages = conversation_history[conversation_key]
+        
+        # Apply history limiting (choose one or combine approaches)
+        if len(messages) > 10:  # Only apply to longer conversations
+            # Option 1: Simple truncation to last N messages
+            messages = messages[-10:]
+            
+            # Option 2: Add a summary marker at the start
+            messages.insert(0, {
+                "role": "system", 
+                "content": f"[Previous conversation history summarized: {len(messages)-10} earlier messages omitted]"
+            })
+        
+        return messages
     
     try:
-        # Parse the JSON manually
-        payload = json.loads(text_body)
-        logger.info(f"Parsed payload type: {payload.get('type', 'unknown')}")
-        
-        # Handle URL verification challenge by returning the raw challenge value
-        if payload.get("type") == "url_verification":
-            challenge = payload.get("challenge")
-            logger.info(f"Verification challenge received: {challenge}")
+        with get_db() as db:
+            # Check if conversation exists
+            conversation = db.query(Conversation).filter(Conversation.id == conversation_key).first()
             
-            # Return the raw challenge value directly as plain text
-            return Response(content=challenge, media_type="text/plain")
-        
-        # Normal event processing continues...
-        if payload.get("type") == "event_callback":
-            event = payload.get("event", {})
-            event_type = event.get("type")
+            if not conversation:
+                logger.info(f"No conversation found in database for {conversation_key}")
+                return []
+                
+            # Get all messages for this conversation
+            messages = db.query(Message).filter(Message.conversation_id == conversation_key).order_by(Message.timestamp).all()
             
-            # Handle bot mentions
-            if event_type == "app_mention":
-                logger.info(f"Bot was mentioned in channel {event.get('channel')}")
+            if not messages:
+                logger.info(f"No messages found in database for conversation {conversation_key}")
+                return []
                 
-                # Extract user ID, channel ID, and text
-                user_id = event.get("user", "")
-                channel_id = event.get("channel", "")
-                text = event.get("text", "")
-                message_ts = event.get("ts", "")
+            # Convert to the format used by conversation_history
+            history = []
+            for msg in messages:
+                history.append({
+                    "role": msg.role,
+                    "content": msg.content,
+                    "timestamp": msg.timestamp,
+                    "message_ts": msg.message_ts,
+                    "metadata": msg.meta_data or {}
+                })
                 
-                # Determine if this is a thread reply and get the thread_ts
-                # If thread_ts exists, this is a reply in a thread
-                # If not, this is a new thread where the current ts becomes the thread_ts
-                thread_ts = event.get("thread_ts", message_ts)
-                logger.info(f"Message ts: {message_ts}, Thread ts: {thread_ts}")
-                
-                # Remove the bot mention from the text (matches <@BOTID>)
-                text = text.replace(f"<@U08GNQ8F2RH>", "@TMAI Agent")
-                
-                if not text:
-                    # If there's no text after removing the mention, respond with a help message
-                    try:
-                        slack_client.chat_postMessage(
-                            channel=channel_id,
-                            text="Hello! I'm your AI assistant. How can I help you?",
-                            thread_ts=thread_ts
-                        )
-                    except SlackApiError as e:
-                        logger.error(f"Error sending help message: {e.response['error']}")
-                    return {}
-                
-                # Create AI request object
-                ai_request = AIRequest(
-                    text=text,
-                    user_id=user_id,
+            logger.info(f"Loaded {len(history)} messages from database for {conversation_key}")
+            return history
+    except Exception as e:
+        logger.error(f"Error loading conversation from database: {str(e)}")
+        return []
+
+# Function to save conversation to database
+def save_conversation_to_db(channel_id, thread_ts, messages):
+    """Save conversation history to database"""
+    if not messages:
+        return
+        
+    conversation_key = f"{channel_id}:{thread_ts}"
+    
+    try:
+        with get_db() as db:
+            # Check if conversation exists
+            conversation = db.query(Conversation).filter(Conversation.id == conversation_key).first()
+            
+            # Create conversation if it doesn't exist
+            if not conversation:
+                conversation = Conversation(
+                    id=conversation_key,
                     channel_id=channel_id,
-                    message_ts=message_ts
+                    thread_ts=thread_ts
                 )
-                
-                # Send initial "processing" message
-                try:
-                    initial_response = slack_client.chat_postMessage(
-                        channel=channel_id,
-                        text="AI is processing...",
-                        thread_ts=thread_ts,
-                        blocks=[
-                            {
-                                "type": "section",
-                                "text": {
-                                    "type": "mrkdwn",
-                                    "text": f"*Input:*\n```\n{text[:50]}{('...' if len(text) > 50 else '')}\n```\n*Status:*\n```\n➤ Analyzing your query...\n```"
-                                },
-                                "accessory": {
-                                    "type": "image",
-                                    "image_url": "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExanRpdDc0enVuOXc3dG9vYWEzOGUyajFkOG03OHB6aTM4aTZhd2kycSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/IUNycHoVqvLDowiiam/giphy.gif",
-                                    "alt_text": "Processing"
-                                }
-                            },
-                            {
-                                "type": "context",
-                                "elements": [
-                                    {
-                                        "type": "mrkdwn",
-                                        "text": "_Please wait while I generate a response..._"
-                                    }
-                                ]
-                            }
-                        ]
-                    )
-                    logger.info(f"Posted initial message with ts: {initial_response.get('ts')}")
+                db.add(conversation)
+                db.flush()
+            
+            # Get existing message timestamps to avoid duplicates
+            existing_timestamps = {m.timestamp for m in db.query(Message.timestamp).filter(Message.conversation_id == conversation_key).all()}
+            
+            # Add new messages
+            for msg in messages:
+                if msg["timestamp"] in existing_timestamps:
+                    continue
                     
-                    # Update the AI request with the message timestamp for reference
-                    ai_request.message_ts = initial_response.get("ts")
+                db_message = Message(
+                    conversation_id=conversation_key,
+                    role=msg["role"],
+                    content=msg["content"],
+                    timestamp=msg["timestamp"],
+                    message_ts=msg.get("message_ts"),
+                    meta_data=msg.get("metadata", {})
+                )
+                db.add(db_message)
+            
+            db.commit()
+            logger.info(f"Saved conversation to database: {conversation_key}")
+    except Exception as e:
+        logger.error(f"Error saving conversation to database: {str(e)}")
+
+def add_message_to_conversation(conversation_key, role, content, message_ts=None, metadata=None):
+    """Add a message to the conversation history."""
+    # Store only the raw message content without any formatting
+    if conversation_key not in conversation_history:
+        conversation_history[conversation_key] = []
+    
+    # Create the message object with raw content
+    message = {
+        "role": role,
+        "content": content,
+        "timestamp": time.time(),
+        "message_ts": message_ts,
+        "metadata": metadata
+    }
+    
+    conversation_history[conversation_key].append(message)
+    
+    # Save to database
+    try:
+        parts = conversation_key.split(":")
+        if len(parts) == 2:
+            channel_id, thread_ts = parts
+            save_conversation_to_db(channel_id, thread_ts, conversation_history[conversation_key])
+    except Exception as e:
+        logger.error(f"Error saving conversation to database: {str(e)}")
+
+def parse_user_mentions(text: str, use_cache: bool = True) -> str:
+    """
+    Convert Slack user mentions (<@U123ABC>) to their actual display names.
+    
+    Args:
+        text: The text containing user mentions
+        use_cache: Whether to use cached user info (default: True)
+    
+    Returns:
+        Text with user mentions replaced by display names
+    """
+    # Cache for user information
+    if not hasattr(parse_user_mentions, '_user_cache'):
+        parse_user_mentions._user_cache = {}
+
+    # Find all user mentions (<@U123ABC>)
+    mention_pattern = r'<@([A-Z0-9]+)>'
+    mentions = re.findall(mention_pattern, text)
+    
+    try:
+        for user_id in mentions:
+            display_name = None
+            
+            # Check cache first if enabled
+            if use_cache and user_id in parse_user_mentions._user_cache:
+                display_name = parse_user_mentions._user_cache[user_id]
+            else:
+                try:
+                    # Apply rate limiting for Slack API
+                    if not slack_limiter.check_rate_limit():
+                        logger.warning("Slack API rate limit exceeded, waiting...")
+                        slack_limiter.wait_if_needed()
+                        
+                    user_info = slack_client.users_info(user=user_id)
+                    if user_info["ok"]:
+                        display_name = (
+                            user_info["user"]["profile"].get("display_name") or
+                            user_info["user"]["profile"].get("real_name") or
+                            f"<@{user_id}>"  # Fallback to original mention
+                        )
+                        
+                        # Cache the result if caching is enabled
+                        if use_cache:
+                            parse_user_mentions._user_cache[user_id] = display_name
                     
                 except SlackApiError as e:
-                    logger.error(f"Error posting initial message: {e.response['error']}")
+                    logger.error(f"Error getting user info for {user_id}: {str(e)}")
+                    display_name = f"<@{user_id}>"  # Keep original mention on error
+            
+            if display_name:
+                text = text.replace(f"<@{user_id}>", display_name)
+    
+    except Exception as e:
+        logger.error(f"Error in parse_user_mentions: {str(e)}")
+        # Return original text if parsing fails
+        return text
+    
+    return text
+
+def safe_append(context_list, content):
+    """
+    Safely append content to the context list, ensuring it's always a string.
+    
+    Args:
+        context_list: The list to append to (usually context_parts)
+        content: The content to append (could be string, list, or other)
+    """
+    if isinstance(content, list):
+        # If it's a list, join it with newlines
+        context_list.append("\n".join(str(item) for item in content))
+    elif content is not None:
+        # For any other type, convert to string
+        context_list.append(str(content))
+    # If None, don't append anything
+
+@app.post("/slack/events")
+async def slack_events(request: Request, background_tasks: BackgroundTasks):
+    logger.info("Slack events endpoint called")
+    
+    payload = await request.json()
+
+    # Normal event processing continues...
+    if payload.get("type") == "event_callback":
+        event = payload.get("event", {})
+        event_type = event.get("type")
+        event_id = payload.get("event_id", "unknown")  # Get unique event ID
+        channel_type = event.get("channel_type", "")
+        
+        # Log full event details for debugging
+        logger.info(f"Processing event ID: {event_id}")
+        logger.info(f"Event type: {event_type}")
+        logger.info("Event: {event}")
+        if event.get("subtype"):
+            return {}
+
+        # Handle direct messages to the bot
+        if event_type == "message" and channel_type == "im":
+            # Skip if no text content or if it's a bot message or processing message
+            text = event.get("text", "")
+            #skip update message
+            if not text.strip() or event.get("bot_id") or "TMAI's neuron firing..." in text:
+                return {}            
+
+            # Extract user ID, channel ID, and text
+            user_id = event.get("user", "")
+            channel_id = event.get("channel", "")
+            message_ts = event.get("ts", "")
+            
+            # Check if this message is part of a thread
+            # If thread_ts exists, use that. Otherwise use the current message ts
+            thread_ts = event.get("thread_ts", message_ts)
+            
+            logger.info(f"Message details - User: {user_id}, Channel: {channel_id}, Thread: {thread_ts}, Text: {text[:100]}...")
+            
+            # Create AI request object
+            ai_request = AIRequest(
+                text=parse_user_mentions(text),
+                user_id=user_id,
+                channel_id=channel_id,
+                message_ts=message_ts,
+                thread_ts=thread_ts  # Add thread_ts to track threading
+            )
+            
+            # Send initial "processing" message
+            try:
+                processing_msg = slack_client.chat_postMessage(
+                    channel=channel_id,
+                    text="TMAI's neuron firing......",
+                    thread_ts=thread_ts,  # Add thread_ts here
+                    blocks=[
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"\n*Status:*\n```\n➤ Analyzing your query...\n```"
+                            },
+                            "accessory": {
+                                "type": "image",
+                                "image_url": "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExanRpdDc0enVuOXc3dG9vYWEzOGUyajFkOG03OHB6aTM4aTZhd2kycSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/IUNycHoVqvLDowiiam/giphy.gif",
+                                "alt_text": "Processing"
+                            }
+                        },
+                        {
+                            "type": "context",
+                            "elements": [
+                                {
+                                    "type": "mrkdwn",
+                                    "text": "Harnessing the power of a trillion artificial neurons... and slightly fewer from my creator ◐"
+                                }
+                            ]
+                        }
+                    ]
+                )
                 
-                # Start processing in the background
-                background_tasks.add_task(process_mention_request, ai_request, thread_ts)
+                # Update the AI request with the processing message timestamp
+                ai_request.message_ts = processing_msg.get("ts")
+
+            except SlackApiError as e:
+                logger.error(f"Error posting initial DM message: {e.response['error']}")
+            
+            # Start processing in the background
+            background_tasks.add_task(process_direct_message, ai_request)
+            
+            return {}
+            
+        # Handle bot mentions
+        elif event_type == "app_mention":
+            logger.info(f"Bot was mentioned in channel {event.get('channel')}")
+            
+            # Extract user ID, channel ID, and text
+            user_id = event.get("user", "")
+            channel_id = event.get("channel", "")
+            text = event.get("text", "")
+            message_ts = event.get("ts", "")
+            
+            # Determine if this is a thread reply and get the thread_ts
+            # If thread_ts exists, this is a reply in a thread
+            # If not, this is a new thread where the current ts becomes the thread_ts
+            thread_ts = event.get("thread_ts", message_ts)
+            
+            # Remove the bot mention from the text (matches <@BOTID>)
+            text = text.replace(f"<@U08GNQ8F2RH>", "")
+
+            # Create AI request object
+            ai_request = AIRequest(
+                text=parse_user_mentions(text),
+                user_id=user_id,
+                channel_id=channel_id,
+                message_ts=message_ts,
+                thread_ts=thread_ts  # Add thread_ts to track threading
+            )
+            
+            # Send initial "processing" message
+            try:
+                initial_response = slack_client.chat_postMessage(
+                    channel=channel_id,
+                    text="TMAI's neuron firing......",
+                    thread_ts=thread_ts,
+                    blocks=[
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"\n*Status:*\n```\n➤ Analyzing your query...\n```"
+                            },
+                            "accessory": {
+                                "type": "image",
+                                "image_url": "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExanRpdDc0enVuOXc3dG9vYWEzOGUyajFkOG03OHB6aTM4aTZhd2kycSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/IUNycHoVqvLDowiiam/giphy.gif",
+                                "alt_text": "Processing"
+                            }
+                        },
+                        {
+                            "type": "context",
+                            "elements": [
+                                {
+                                    "type": "mrkdwn",
+                                    "text": "Harnessing the power of a trillion artificial neurons... and slightly fewer from my creator ◓"
+                                }
+                            ]
+                        }
+                    ]
+                )
+                logger.info(f"Posted initial message with ts: {initial_response.get('ts')}")
                 
-        # Return an empty 200 response to acknowledge receipt
-        return {}
+                # Update the AI request with the message timestamp for reference
+                ai_request.message_ts = initial_response.get("ts")
+                
+                
+            except SlackApiError as e:
+                logger.error(f"Error posting initial message: {e.response['error']}")
+            
+            # Start processing in the background
+            background_tasks.add_task(process_mention_request, ai_request, thread_ts)
+            
+    # Return an empty 200 response to acknowledge receipt
+    return {}
+    
+    
+
+async def process_direct_message(ai_request: AIRequest):
+    """
+    Process a direct message to the bot and generate a response.
+    
+    Args:
+        ai_request: The AI request object containing user, channel, text, and thread info
+    """
+    start_time = time.time()
+    logger.info(f"Processing direct message from user {ai_request.user_id} in channel {ai_request.channel_id}")
+    
+    try:
+        # Check rate limiting
+        if not check_rate_limit():
+            try:
+                slack_client.chat_update(
+                    channel=ai_request.channel_id,
+                    ts=ai_request.message_ts,
+                    text="⚠️ Rate limit exceeded. Please try again in a minute."
+                )
+            except SlackApiError as e:
+                logger.error(f"Error updating message with rate limit notice: {e.response['error']}")
+            return
+        
+        # Use thread_ts from the request for threading
+        thread_ts = ai_request.thread_ts
+        conversation_key = f"{ai_request.channel_id}:{thread_ts}"
+
+        # Parse response to return the correct user id
+        ai_request.text = parse_user_mentions(ai_request.text)
+
+        # Obtain the user's display name
+        sender_name = "User"  # Default fallback
+        try:
+            user_info = slack_client.users_info(user=ai_request.user_id)
+            if user_info.get("ok") and user_info.get("user"):
+                sender_name = user_info["user"].get("real_name") or user_info["user"].get("name") or "User"
+        except SlackApiError as e:
+            logger.warning(f"Could not get user name, using default: {e.response['error']}")
+
+        # Try loading from in-memory cache first
+        if conversation_key in conversation_history and conversation_history[conversation_key]:
+            logger.info(f"Using in-memory conversation history with {len(conversation_history[conversation_key])} messages")
+        else:
+            # If not in memory, try to load from database or rebuild from Slack
+            logger.info(f"DM conversation not in memory, attempting to load from database")
+            db_messages = load_conversation_from_db(ai_request.channel_id, thread_ts)
+            
+            if db_messages:
+                # If found in database, update in-memory cache
+                conversation_history[conversation_key] = db_messages
+                logger.info(f"Loaded DM conversation history from database with {len(db_messages)} messages")
+            else:
+                # For DM, try to rebuild history from recent messages
+                logger.info(f"Rebuilding conversation history from Slack for DM channel {ai_request.channel_id} in thread {thread_ts}")
+                
+                try:
+                    # Get recent messages in the DM channel
+                    response = slack_client.conversations_replies(
+                        channel=ai_request.channel_id,
+                        ts=thread_ts
+                    )
+                    
+                    if response.get("ok") and response.get("messages"):
+                        # Process the messages
+                        messages = response.get("messages", [])
+                        conversation_history[conversation_key] = []
+                        
+                        # Reverse the messages to get them in chronological order
+                        messages.reverse()
+                        
+                        for msg in messages:
+                            # Determine if it's a user or bot message
+                            is_bot = msg.get("bot_id") is not None
+                            text = msg.get("text", "")
+                            
+                            if not text:
+                                continue
+
+                            # For bot messages, remove "TMAI's neuron firing......" and other status indicators
+                            if is_bot:
+                                if "TMAI's neuron firing..." in text or "is thinking" in text:
+                                    continue
+                            
+                            #skip default thread signal
+                            if "New Assistant Thread" in text:
+                                continue
+                            
+                            # Add to conversation history
+                            add_message_to_conversation(
+                                conversation_key,
+                                "assistant" if is_bot else "user",
+                                text,
+                                msg.get("ts")
+                            )
+                        
+                        logger.info(f"Rebuilt DM conversation history with {len(conversation_history[conversation_key])} messages")
+                    else:
+                        logger.warning(f"Failed to get DM history: {response.get('error', 'Unknown error')}")
+                except SlackApiError as e:
+                    logger.error(f"Error getting DM history: {e.response['error']}")
+        
+        # Build context for AI - this is just formatting, NOT storage
+        context_parts = []
+        context_parts.append(f"Current {sender_name} query: {parse_user_mentions(ai_request.text)}\n")
+
+        # Format conversation history for context
+        history_context = []
+        
+        # Add conversation history if it exists
+        if conversation_key in conversation_history and conversation_history[conversation_key]:
+            # Limit to 20 most recent messages
+            messages = conversation_history[conversation_key]
+            if len(messages) > 20:
+                messages = messages[-20:]  # Keep only the last 20 messages
+                history_context = [f"**Conversation History:** Showing only the 20 most recent messages."]
+            else:
+                history_context = [f"**Here is the conversation history between you and {sender_name} so far:**"]
+            
+            # Format the messages for context (this is just for display, not storage)
+            for i, msg in enumerate(messages):
+                if msg["role"] == "user":
+                    # Format user messages with sender name
+                    msg_content = parse_user_mentions(msg['content'])
+                    history_context.append(f"**{sender_name} (#{i} turn):** {msg_content}")
+                else:
+                    # Format assistant messages
+                    content = msg["content"]
+                    if len(content) > 500:
+                        content = content[:500] + "... (content truncated)"
+                    history_context.append(f"**Assistant (#{i - 1} turn):** {content}")
+
+        logger.info(f"History context throughout the conversation: {' '.join(history_context)}")
+
+        # Add the raw message to conversation history (only once!)
+        add_message_to_conversation(conversation_key, "user", parse_user_mentions(ai_request.text), ai_request.message_ts)
+        
+        # Step 1: Analyze the content to determine what we need to do
+        try:
+            content_analysis = await analyze_content(ai_request.text, "\n".join(history_context), sender_name=sender_name)
+            logger.info(f"Content analysis: {content_analysis}")
+            
+            # Manual check for Linear issue creation intent
+            if not content_analysis.create_linear_issue:
+                # Keywords that strongly indicate issue creation intent
+                issue_creation_keywords = [
+                    "create issue", "create a issue", "create an issue", 
+                    "make issue", "make a issue", "make an issue",
+                    "new issue", "add issue", "add a issue", "add an issue",
+                    "create task", "create a task", "new task", "add task",
+                    "create ticket", "make ticket", "new ticket",
+                    "title", "title is", "title:", "titled"
+                ]
+                
+                # Check for title/description patterns
+                title_desc_pattern = re.search(r'title[:\s]+(.*?)(?:\s*description[:\s]+|\s*$)', ai_request.text, re.IGNORECASE)
+                
+                # Check for keywords
+                has_creation_keyword = any(keyword.lower() in ai_request.text.lower() for keyword in issue_creation_keywords)
+                
+                # Set create_linear_issue to True if any pattern matches
+                if has_creation_keyword or title_desc_pattern:
+                    logger.info("Manual detection found Linear issue creation intent")
+                    content_analysis.create_linear_issue = True
+                    content_analysis.content_type = "prompt_requires_tool_use"
+            
+        except Exception as e:
+            error_msg = f"Error analyzing content: {str(e)}"
+            logger.error(error_msg)
+            content_analysis = ContentAnalysisResult()
+            content_analysis.text = ai_request.text
+            content_analysis.content_type = "simple_prompt"  # Default to simple prompt
+            
+        # Extract URLs if present in the text
+        urls = extract_urls(ai_request.text)
+        if urls:
+            content_analysis.urls = urls
+            ai_request.urls = urls
+            
+        # Step 2: Update the processing message with analysis results
+        response_stage_text = "*Status:*\n```\n✓ Query analyzed\n"
+        
+        # This shows the additional actions we'll take
+        if content_analysis.content_type == "prompt_requires_tool_use":            
+            if content_analysis.urls:
+                response_stage_text += "  ➤ Processing URLs\n"
+                
+            if content_analysis.requires_slack_channel_history:
+                response_stage_text += "  ➤ Searching channel history\n"
+                
+            if content_analysis.perform_RAG_on_linear_issues:
+                response_stage_text += "  ➤ Searching Linear\n"
+                
+            if content_analysis.create_linear_issue:
+                response_stage_text += "  ➤ Creating Linear issue\n"
+        else:
+            response_stage_text += "➤ Simple query processing\n"
+
+        response_stage_text += "```"
+        
+        # Add all URLs that are being processed
+        if content_analysis.urls:
+            for url in content_analysis.urls[:3]:  # Show max 3 URLs to avoid clutter
+                shortened_url = url[:50] + "..." if len(url) > 50 else url
+                response_stage_text += f"  - URL: {shortened_url}\n"
+            if len(content_analysis.urls) > 3:
+                response_stage_text += f"  - ...and {len(content_analysis.urls) - 3} more URLs\n"
+                
+        try:
+            # Update the initial processing message
+            slack_client.chat_update(
+                channel=ai_request.channel_id,
+                ts=ai_request.message_ts,
+                text="TMAI's neuron firing",
+                blocks=[
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"\n{response_stage_text}"
+                        },
+                        "accessory": {
+                            "type": "image",
+                            "image_url": "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExanRpdDc0enVuOXc3dG9vYWEzOGUyajFkOG03OHB6aTM4aTZhd2kycSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/IUNycHoVqvLDowiiam/giphy.gif",
+                            "alt_text": "Processing"
+                        }
+                    },
+                    {
+                        "type": "context",
+                        "elements": [
+                            {
+                                "type": "mrkdwn",
+                                "text": "Harnessing the power of a trillion artificial neurons... and slightly fewer from my creator ◑"
+                            }
+                        ]
+                    }
+                ]
+            )
+        except SlackApiError as e:
+            logger.warning(f"Could not update processing message: {e.response.get('error', '')}")
+            
+        # Step 3: Process any URLs
+        url_results = []
+        if content_analysis.urls:
+            # Process each URL
+            for url in content_analysis.urls:
+                try:
+                    result = await fetch_url_content(url)
+                    url_results.append(result)
+                    logger.info(f"Processed URL {url}: got {len(result.get('text', ''))} chars of content")
+                except Exception as e:
+                    logger.error(f"Error processing URL {url}: {str(e)}")
+                    url_results.append({
+                        "url": url,
+                        "text": f"Error processing URL: {str(e)}",
+                        "error": str(e)
+                    })
+            
+            # Add URL content to context
+            for result in url_results:
+                if "text" in result and result["text"]:
+                    url_text = result["text"]
+                    # Limit text to 2000 chars to avoid context overflow
+                    if len(url_text) > 2000:
+                        url_text = url_text[:2000] + "... (content truncated)"
+                    
+                    safe_append(context_parts, f"Content from URL {result['url']}:\n{url_text}\n")
+
+            response_stage_text = response_stage_text.replace("  ➤ Processing URLs\n", "✓ Processing URLs\n")
+            # Update message to show we're processing URLs
+            try:
+                slack_client.chat_update(
+                    channel=ai_request.channel_id,
+                    text="TMAI's neuron firing",
+                    ts=ai_request.message_ts,
+                    blocks=[
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"\n{response_stage_text}"
+                            },
+                            "accessory": {
+                                "type": "image",
+                                "image_url": "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExanRpdDc0enVuOXc3dG9vYWEzOGUyajFkOG03OHB6aTM4aTZhd2kycSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/IUNycHoVqvLDowiiam/giphy.gif",
+                                "alt_text": "Processing"
+                            }
+                        },
+                        {
+                            "type": "context",
+                            "elements": [
+                                {
+                                    "type": "mrkdwn",
+                                    "text": "Harnessing the power of a trillion artificial neurons... and slightly fewer from my creator ◒"
+                                }
+                            ]
+                        }
+                    ]
+                )
+            except SlackApiError as e:
+                logger.warning(f"Could not update processing message: {e.response.get('error', '')}")
+                
+        # Step 4: Search Slack channel history if needed
+        if content_analysis.requires_slack_channel_history:                
+            # Search channel history (limited for DMs)
+            search_results = await search_channel_history(
+                ai_request.channel_id,
+                {"limit": 100},  # Limit to 100 messages
+                query=content_analysis.text,
+                history_context=history_context
+            )
+
+            response_stage_text = response_stage_text.replace("  ➤ Searching channel history\n", "✓ Searching channel history\n")
+            try:
+                slack_client.chat_update(
+                    channel=ai_request.channel_id,
+                    text="TMAI's neuron firing",
+                    ts=ai_request.message_ts,
+                    blocks=[
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"\n{response_stage_text}"
+                            },
+                            "accessory": {
+                                "type": "image",
+                                "image_url": "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExanRpdDc0enVuOXc3dG9vYWEzOGUyajFkOG03OHB6aTM4aTZhd2kycSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/IUNycHoVqvLDowiiam/giphy.gif",
+                                "alt_text": "Processing"
+                            }
+                        },
+                        {
+                            "type": "context",
+                            "elements": [
+                                {
+                                    "type": "mrkdwn",
+                                    "text": "Harnessing the power of a trillion artificial neurons... and slightly fewer from my creator ◐"
+                                }
+                            ]
+                        }
+                    ]
+                )
+            except SlackApiError as e:
+                logger.warning(f"Could not update processing message: {e.response.get('error', '')}")
+            
+            if search_results and search_results.get("messages"):
+                search_content = "Channel history search results:\n"
+                for msg in search_results.get("messages", [])[:5]:  # Limit to 5 most relevant
+                    search_content += f"- {msg.get('text', '')}\n"
+                
+                safe_append(context_parts, search_content)
+                
+        # Step 5: Perform RAG on Linear issues if needed
+        if content_analysis.perform_RAG_on_linear_issues:         
+            # Search Linear issues
+            linear_results = await perform_linear_rag_search(content_analysis.text, limit=5, history_context=history_context, sender_name=sender_name)
+            
+            if linear_results and linear_results.get("results"):
+                formatted_issues = format_linear_search_results(linear_results)
+                safe_append(context_parts, "\n".join(formatted_issues))
+
+            
+            response_stage_text = response_stage_text.replace("  ➤ Searching Linear\n", "✓ Searching Linear\n")
+
+            try:
+                slack_client.chat_update(
+                    channel=ai_request.channel_id,
+                    text="TMAI's neuron firing",
+                    ts=ai_request.message_ts,
+                    blocks=[
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"\n{response_stage_text}"
+                            },
+                            "accessory": {
+                                "type": "image",
+                                "image_url": "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExanRpdDc0enVuOXc3dG9vYWEzOGUyajFkOG03OHB6aTM4aTZhd2kycSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/IUNycHoVqvLDowiiam/giphy.gif",
+                                "alt_text": "Processing"
+                            }
+                        },
+                        {
+                            "type": "context",
+                            "elements": [
+                                {
+                                    "type": "mrkdwn",
+                                    "text": "Harnessing the power of a trillion artificial neurons... and slightly fewer from my creator ◓"
+                                }
+                            ]
+                        }
+                    ]
+                )
+            except SlackApiError as e:
+                logger.warning(f"Could not update processing message: {e.response.get('error', '')}")
+                
+        # Step 6: Create Linear issue if needed
+        if content_analysis.create_linear_issue:
+                
+            # Create Linear issue
+            result = await generate_linear_issue(content_analysis.text, "\n".join(history_context), sender_name)
+            
+            response_stage_text = response_stage_text.replace("  ➤ Creating Linear issue\n", "✓ Creating Linear issue\n")
+            try:
+                slack_client.chat_update(
+                    channel=ai_request.channel_id,
+                    text="TMAI's neuron firing",
+                    ts=ai_request.message_ts,
+                    blocks=[
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"\n{response_stage_text}"
+                            },
+                            "accessory": {
+                                "type": "image",
+                                "image_url": "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExanRpdDc0enVuOXc3dG9vYWEzOGUyajFkOG03OHB6aTM4aTZhd2kycSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/IUNycHoVqvLDowiiam/giphy.gif",
+                                "alt_text": "Processing"
+                            }
+                        },
+                        {
+                            "type": "context",
+                            "elements": [
+                                {
+                                    "type": "mrkdwn",
+                                    "text": "Harnessing the power of a trillion artificial neurons... and slightly fewer from my creator ◑"
+                                }
+                            ]
+                        }
+                    ]
+                )
+            except SlackApiError as e:
+                logger.warning(f"Could not update processing message: {e.response.get('error', '')}")
+            
+            if result and result.get("success"):
+                issue_url = result.get("issue_url", "")
+                issue_title = result.get("issue_title", "")
+                response_stage_text += f"✓ Created Linear issue: {issue_title}\n"
+                safe_append(context_parts, f"Created Linear issue: {issue_title}. URL: {issue_url}")
+            else:
+                response_stage_text += f"❌ Error creating Linear issue: {result.get('error', 'Unknown error')}\n"
+        
+        response_stage_text += " ```➤ Generating response...\n```"
+        
+        try:
+            slack_client.chat_update(
+                channel=ai_request.channel_id,
+                text="TMAI's neuron firing",
+                ts=ai_request.message_ts,
+                blocks=[
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"\n{response_stage_text}"
+                        },
+                        "accessory": {
+                            "type": "image",
+                            "image_url": "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExanRpdDc0enVuOXc3dG9vYWEzOGUyajFkOG03OHB6aTM4aTZhd2kycSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/IUNycHoVqvLDowiiam/giphy.gif",
+                            "alt_text": "Processing"
+                        }
+                    },
+                    {
+                        "type": "context",
+                        "elements": [
+                            {
+                                "type": "mrkdwn",
+                                "text": "Harnessing the power of a trillion artificial neurons... and slightly fewer from my creator ◒"
+                            }
+                        ]
+                    }
+                ]
+            )
+        except SlackApiError as e:
+            logger.warning(f"Could not update processing message: {e.response.get('error', '')}")
+        
+        # Step 7: Call AI with the full context including conversation history
+        logger.info("Building final context for AI call with conversation history")
+        # Ensure all context parts are strings before joining
+        for i in range(len(context_parts)):
+            if not isinstance(context_parts[i], str):
+                logger.warning(f"Non-string found in context_parts at index {i}: {type(context_parts[i])}")
+                context_parts[i] = str(context_parts[i])
+                
+        final_context = "\n".join(context_parts)
+        
+        # Call AI to generate response
+        final_response = await stream_ai_response(final_context, "\n".join(history_context), ai_request, thread_ts, sender_name)
+        
+        # Log the time it took to process the request
+        elapsed_time = time.time() - start_time
+        logger.info(f"Processed direct message in {elapsed_time:.2f} seconds")
         
     except Exception as e:
-        logger.error(f"Error processing Slack event: {str(e)}")
-        return {"status": "error", "message": str(e)}
+        error_msg = f"Error processing direct message request: {str(e)}"
+        logger.error(error_msg)
+        logger.error(traceback.format_exc())
+        
+        try:
+            slack_client.chat_update(
+                channel=ai_request.channel_id,
+                ts=ai_request.message_ts,
+                text=f"⚠️ Error: {error_msg}\n\nPlease try again later."
+            )
+        except SlackApiError as slack_err:
+            logger.error(f"Error sending error message: {slack_err.response.get('error', '')}")
 
 def extract_urls(text: str) -> List[str]:
     """Extract URLs from text."""
@@ -386,6 +1230,7 @@ async def fetch_url_content(url: str) -> Dict[str, Any]:
             "url": url,
             "text": "",
             "title": "",
+            "is_public_url": False,
             "is_tweet": False,
             "tweet_id": None,
             "user_id": None,
@@ -697,6 +1542,7 @@ async def fetch_url_content(url: str) -> Dict[str, Any]:
         
         # Handle regular URLs
         else:
+            result["is_public_url"] = False
             # Non-specialized URL or missing tokens, use web scraping
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}) as response:
@@ -738,58 +1584,9 @@ async def fetch_url_content(url: str) -> Dict[str, Any]:
             "text": f"Error fetching content: {str(e)}",
             "error": f"Error in fetch_url_content: {str(e)}",
             "is_tweet": False,
-            "is_github": False
+            "is_github": False,
+            "is_public_url": False
         }
-
-def parse_user_mentions(text):
-    """
-    Convert Slack user mentions (<@U123ABC>) to their actual display names.
-    Returns both the original text and a display-name version.
-    """
-    # Find all user mentions (<@U123ABC>)
-    mention_pattern = r'<@([A-Z0-9]+)>'
-    mentions = re.findall(mention_pattern, text)
-    
-    # Replace each mention with actual username
-    for user_id in mentions:
-        try:
-            user_info = slack_client.users_info(user=user_id)
-            if user_info["ok"]:
-                # Get user information in order of preference
-                display_name = (
-                    user_info["user"]["profile"].get("display_name") or
-                    f"<@{user_id}>"  # Fallback to original mention if no name found
-                )
-                
-                # Also get title if available
-                title = user_info["user"]["profile"].get("title", "")
-                
-                # Replace the mention with the display name
-                text = text.replace(f"<@{user_id}>", display_name)
-                
-                
-        except SlackApiError as e:
-            logger.error(f"Error getting user info for {user_id}: {str(e)}")
-            # Keep the original mention format if we can't get user info
-            continue
-    
-    return text
-
-def safe_append(context_list, content):
-    """
-    Safely append content to the context list, ensuring it's always a string.
-    
-    Args:
-        context_list: The list to append to (usually context_parts)
-        content: The content to append (could be string, list, or other)
-    """
-    if isinstance(content, list):
-        # If it's a list, join it with newlines
-        context_list.append("\n".join(str(item) for item in content))
-    elif content is not None:
-        # For any other type, convert to string
-        context_list.append(str(content))
-    # If None, don't append anything
 
 async def process_mention_request(ai_request: AIRequest, thread_ts: str):
     """
@@ -858,7 +1655,9 @@ async def process_mention_request(ai_request: AIRequest, thread_ts: str):
                             # Process the messages
                             messages = response.get("messages", [])
                             conversation_history[conversation_key] = []
-                            
+
+                            #no idea why the process method sends the first message 2 times
+                            messages = messages[1:]
                             for msg in messages:
                                 # Determine if it's a user or bot message
                                 is_bot = msg.get("bot_id") is not None
@@ -868,11 +1667,10 @@ async def process_mention_request(ai_request: AIRequest, thread_ts: str):
                                 if not text:
                                     continue
                                     
-                                # For bot messages, remove "AI is processing..." and other status indicators
+                                # For bot messages, remove "TMAI's neuron firing......" and other status indicators
                                 if is_bot:
-                                    if "AI is processing" in text or "is thinking" in text:
-                                        continue
-                                
+                                    if "TMAI's neuron firing..." in text or "is thinking" in text:
+                                        continue                                
                                 # Add to conversation history
                                 add_message_to_conversation(
                                     conversation_key,
@@ -889,7 +1687,7 @@ async def process_mention_request(ai_request: AIRequest, thread_ts: str):
         
         # Build context for AI - this is just formatting, NOT storage
         context_parts = []
-        context_parts.append(f"Current {sender_name} query: {ai_request.text}\n")
+        context_parts.append(f"Current {sender_name} query: {parse_user_mentions(ai_request.text)}\n")
 
         # Format conversation history for context
         history_context = []
@@ -915,12 +1713,12 @@ async def process_mention_request(ai_request: AIRequest, thread_ts: str):
                     content = msg["content"]
                     if len(content) > 500:
                         content = content[:500] + "... (content truncated)"
-                    history_context.append(f"**Assistant (#{i} turn):** {content}")
+                    history_context.append(f"**Assistant (#{i - 1} turn):** {content}")
 
-        logger.info(f"History context throughout the conversation: {history_context}")
+        logger.info(f"History context throughout the conversation: {' '.join(history_context)}")
 
         # Add the raw message to conversation history (only once!) Add here to prevent the current message from being added to the history
-        add_message_to_conversation(conversation_key, "user", ai_request.text, ai_request.message_ts)
+        add_message_to_conversation(conversation_key, "user", parse_user_mentions(ai_request.text), ai_request.message_ts)
         
         # Step 1: Analyze the content to determine what we need to do
         try:
@@ -968,14 +1766,14 @@ async def process_mention_request(ai_request: AIRequest, thread_ts: str):
                 try:
                     slack_client.chat_update(
                         channel=ai_request.channel_id,
-                        text="",
+                        text="TMAI's neuron firing",
                         ts=ai_request.message_ts,
                         blocks=[
                             {
                                 "type": "section",
                                 "text": {
                                     "type": "mrkdwn",
-                                    "text": f"*Input:*\n```\n{ai_request.text[:50]}{('...' if len(ai_request.text) > 50 else '')}\n```\n*Status:*\n```\n✓ Query analyzed\n➤ Searching Slack history...\n```"
+                                    "text": f"\n*Status:*\n```\n✓ Query analyzed\n➤ Searching Slack history...\n```"
                                 },
                                 "accessory": {
                                     "type": "image",
@@ -1080,18 +1878,18 @@ async def process_mention_request(ai_request: AIRequest, thread_ts: str):
                     linear_stage_text = "*Status:*\n```\n✓ Query analyzed\n"
                     if content_analysis.requires_slack_channel_history:
                         linear_stage_text += "✓ Slack history searched\n"
-                    linear_stage_text += "➤ Searching Linear issues...\n```"
+                    linear_stage_text += "➤ Searching Linear...\n```"
                     
                     slack_client.chat_update(
                         channel=ai_request.channel_id,
-                        text="",
+                        text="TMAI's neuron firing",
                         ts=ai_request.message_ts,
                         blocks=[
                             {
                                 "type": "section",
                                 "text": {
                                     "type": "mrkdwn",
-                                    "text": f"*Input:*\n```\n{ai_request.text[:50]}{('...' if len(ai_request.text) > 50 else '')}\n```\n{linear_stage_text}"
+                                    "text": f"\n{linear_stage_text}"
                                 },
                                 "accessory": {
                                     "type": "image",
@@ -1150,25 +1948,8 @@ async def process_mention_request(ai_request: AIRequest, thread_ts: str):
 
                 for result in url_results:
                     context_parts.append(f"\nURL: {result['url']}")
-                    context_parts.append(f"Type: {result['content_type']}")
-                    
-                    if result.get("error"):
-                        context_parts.append(f"Error: {result['error']}")
-                    elif result.get("title"):
-                        context_parts.append(f"Title: {result['title']}")
-                        
-                        # Add metadata based on content type
-                        if result["content_type"] == "github":
-                            if "metadata" in result and "stars" in result["metadata"]:
-                                context_parts.append(f"Stars: {result['metadata']['stars']}")
-                                context_parts.append(f"Language: {result['metadata'].get('language', 'Unknown')}")
-                        
-                        # Add text content (limited to keep context reasonable)
-                        if result.get("text"):
-                            text = result["text"]
-                            if len(text) > 500:
-                                text = text[:500] + "... (content truncated)"
-                            context_parts.append(f"Content: {text}")
+                    context_parts.append(f"Title: {result['title']}")
+                    context_parts.append(f"Text: {result['text'][:500]}...(content truncated)")
 
         # if content_analysis.create_linear_issue == False:
         #     content_analysis.create_linear_issue = True
@@ -1189,7 +1970,7 @@ async def process_mention_request(ai_request: AIRequest, thread_ts: str):
             # Check if any of the keywords are in the text
             if any(keyword in text_lower for keyword in issue_creation_keywords):
                 content_analysis.create_linear_issue = True
-                print(f"Manually overriding create_linear_issue to True based on keyword detection")
+                logger.info(f"Manually overriding create_linear_issue to True based on keyword detection")
 
         if content_analysis.create_linear_issue:
             try:
@@ -1198,14 +1979,14 @@ async def process_mention_request(ai_request: AIRequest, thread_ts: str):
                 try:
                     slack_client.chat_update(
                         channel=ai_request.channel_id,
-                        text="",
+                        text="TMAI's neuron firing",
                         ts=ai_request.message_ts,
                         blocks=[
                             {
                                 "type": "section",
                                 "text": {
                                     "type": "mrkdwn",
-                                    "text": f"*Input:*\n```\n{ai_request.text[:50]}{('...' if len(ai_request.text) > 50 else '')}\n```\n{create_issue_text}"
+                                    "text": f"\n{create_issue_text}"
                                 },
                                 "accessory": {
                                     "type": "image",
@@ -1263,7 +2044,7 @@ async def process_mention_request(ai_request: AIRequest, thread_ts: str):
             if content_analysis.requires_slack_channel_history:
                 response_stage_text += "✓ Slack history searched\n"
             if content_analysis.perform_RAG_on_linear_issues:
-                response_stage_text += "✓ Linear issues searched\n"
+                response_stage_text += "✓ Linear searched\n"
             if content_analysis.create_linear_issue:
                 if result.get("success"):
                     response_stage_text += f"✓ Linear issue created\n"
@@ -1277,14 +2058,14 @@ async def process_mention_request(ai_request: AIRequest, thread_ts: str):
             
             slack_client.chat_update(
                 channel=ai_request.channel_id,
-                text="",
+                text="TMAI's neuron firing",
                 ts=ai_request.message_ts,
                 blocks=[
                     {
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f"*Input:*\n```\n{ai_request.text[:50]}{('...' if len(ai_request.text) > 50 else '')}\n```\n{response_stage_text}"
+                            "text": f"\n{response_stage_text}"
                         },
                         "accessory": {
                             "type": "image",
@@ -1297,7 +2078,7 @@ async def process_mention_request(ai_request: AIRequest, thread_ts: str):
                         "elements": [
                             {
                                 "type": "mrkdwn",
-                                "text": "_Please wait while I generate a response..._"
+                                "text": "Harnessing the power of a trillion artificial neurons... and slightly fewer from my creator ◐"
                             }
                         ]
                     }
@@ -1315,7 +2096,6 @@ async def process_mention_request(ai_request: AIRequest, thread_ts: str):
                 context_parts[i] = str(context_parts[i])
         
         full_context = "\n".join(context_parts)
-        logger.info(f"Full context: {full_context}")
         
         # Get the message with streaming for a better user experience
         message_ts = await stream_ai_response(full_context, history_context, ai_request, thread_ts, sender_name=sender_name)
@@ -1437,7 +2217,6 @@ async def analyze_content(text: str, history_context: List[str], sender_name: st
             
             # Parse the raw response into a JSON object
             analysis = json.loads(raw_analysis)
-            logger.info(f"Parsed AI analysis: {analysis}")
             
             # Check if required fields exist in the analysis
             if "content_type" not in analysis:
@@ -1453,7 +2232,6 @@ async def analyze_content(text: str, history_context: List[str], sender_name: st
             if "urls" in analysis and analysis["urls"]:
                 result.urls = analysis["urls"]
             
-            logger.info(f"AI determined content type: {result.content_type}, requires_channel_history: {result.requires_slack_channel_history}, perform_RAG: {result.perform_RAG_on_linear_issues}, create_linear_issue: {result.create_linear_issue}")
             return result
         except json.JSONDecodeError as je:
             logger.error(f"JSON parsing error: {str(je)}")
@@ -1832,6 +2610,8 @@ async def perform_linear_rag_search(query: Optional[str] = None, limit: int = 10
                     history_context="\n".join(history_context),
                     sender_name=sender_name
                 )
+                
+                logger.info(f"Sending this user prompt to OpenAI: {user_prompt}")
 
                 #use different model for linear search
                 AI_MODEL = "o3-mini"
@@ -2322,7 +3102,7 @@ async def stream_ai_response(context: str, history_context: str, ai_request: AIR
                         # Update the current message with accumulated part
                         formatted_text = format_for_slack(current_part)
                         if part_number > 1:
-                            formatted_text = f"Part {part_number}:\n{formatted_text}"
+                            formatted_text = f"\n{formatted_text}"
                             
                         slack_client.chat_update(
                             channel=ai_request.channel_id,
@@ -2345,7 +3125,7 @@ async def stream_ai_response(context: str, history_context: str, ai_request: AIR
                 # Final update with any remaining content
                 formatted_text = format_for_slack(current_part)
                 if part_number > 1:
-                    formatted_text = f"Part {part_number}:\n{formatted_text}"
+                    formatted_text = f"\n{formatted_text}"
                     
                 slack_client.chat_update(
                     channel=ai_request.channel_id,
@@ -2450,224 +3230,6 @@ def format_linear_search_results(linear_results: Dict[str, Any]) -> List[str]:
                 
     return context_parts
 
-def get_slack_users_list():
-    """
-    Get the list of all users in the Slack workspace.
-    """
-    try:
-        # Apply rate limiting for Slack API
-        if not slack_limiter.check_rate_limit():
-            logger.warning("Slack API rate limit exceeded, waiting...")
-            slack_limiter.wait_if_needed()
-        
-        response = slack_client.users_list()
-        members = response.get("members")
-        valid_users = []
-        for member in members:
-            if member.get("deleted") == False and member.get("is_bot") == False and member.get("is_email_confirmed") == True and member.get("is_primary_owner") == False:
-                valid_user = {
-                    "display_name": "",
-                    "real_name": "",
-                    "title": "",
-                    "team": ""
-                }
-                valid_user["display_name"] = member.get("profile", {}).get("display_name")
-                valid_user["real_name"] = member.get("profile", {}).get("real_name")
-                valid_user["title"] = member.get("profile", {}).get("title")
-                valid_user["team"] = member.get("team")
-                valid_users.append(valid_user)
-        return valid_users
-    except SlackApiError as e:
-        logger.error(f"Slack API error: {e}")
-        return []
-
-def get_linear_names():
-    """
-    Get the list of all users in the Linear workspace.
-    """
-    linear_users = []
-    raw_list =  [
-            "@agustin: agustin@tokenmetrics.com: MKT",
-            "@ahmedhamdy: Ahmed Hamdy: AI",
-            "@andrew: Andrew Tran: AI",
-            "@ankit: Dao Truong An: ENG",
-            "@ashutosh: Ashutosh: ENG",
-            "@ayo: Ayo: PRO",
-            "@ayush: Ayush Jalan",
-            "@bartosz: Bartosz Kusnierczak: ENG",
-            "@ben: Ben Diagi: PRO",
-            "@caleb: Caleb Nnamani: MKT",
-            "@chao: Chao Li: AI",
-            "@chetan: Chetan Kale",
-            "@divine: Divine Anthony: ENG",
-            "@faith: Faith Oladejo: PRO",
-            "@favour: Favour Ikwan: OPS",
-            "@grady: Grady Matthias Oktavian: AI",
-            "@harshg: Harsh Gautam: ENG",
-            "@hemank: Hemank Sharma",
-            "@ian: Ian Balina",
-            "@jake: Jake Nguyen: AI",
-            "@khadijah: khadijah@tokenmetrics.com: OPS",
-            "@manav: Manav Garg: ENG",
-            "@noel: Emanuel Cruz: MKT",
-            "@olaitan: Olaitan Akintunde: MKT",
-            "@ozcan: Ozcan Ilhan: ENG",
-            "@peterson: Peterson Nwoko: ENG",
-            "@phat: Phát -: OPS",
-            "@raldrich: Raldrich Oracion: PRO",
-            "@roshan1: Roshan Ganesh: MKT",
-            "@salman: Salman Haider",
-            "@sam: Sam Monac",
-            "@suleman: Suleman Tariq: ENG",
-            "@tafcirm: Tafcir Majumder: MKT",
-            "@talha: Talha Ahmad: OPS",
-            "@talhacagri: Talha Çağrı Kotcioglu: AI",
-            "@val: Valentine Enedah: PRO",
-            "@vasilis: Vasilis Kotopoulos: AI",
-            "@williams: Williams Cherechi: ENG",
-            "@zaiying: Zaiying Li: OPS"
-        ]
-    for user in raw_list:
-        linear_user = {
-            "username": "",
-            "real_name": "",
-            "team": ""  
-        }
-        linear_user["username"] = user.split(":")[0].strip()
-        linear_user["real_name"] = user.split(":")[1].strip()
-        if len(user.split(":")) > 2:
-            linear_user["team"] = user.split(":")[2].strip()
-        else:
-            linear_user["team"] = None
-        linear_users.append(linear_user)
-    return linear_users
-
-# Function to load conversation history from database
-def load_conversation_from_db(channel_id, thread_ts):
-    """Load conversation history from database"""
-    conversation_key = f"{channel_id}:{thread_ts}"
-    
-    # If found in memory cache
-    if conversation_key in conversation_history:
-        messages = conversation_history[conversation_key]
-        
-        # Apply history limiting (choose one or combine approaches)
-        if len(messages) > 10:  # Only apply to longer conversations
-            # Option 1: Simple truncation to last N messages
-            messages = messages[-10:]
-            
-            # Option 2: Add a summary marker at the start
-            messages.insert(0, {
-                "role": "system", 
-                "content": f"[Previous conversation history summarized: {len(messages)-10} earlier messages omitted]"
-            })
-        
-        return messages
-    
-    try:
-        with get_db() as db:
-            # Check if conversation exists
-            conversation = db.query(Conversation).filter(Conversation.id == conversation_key).first()
-            
-            if not conversation:
-                logger.info(f"No conversation found in database for {conversation_key}")
-                return []
-                
-            # Get all messages for this conversation
-            messages = db.query(Message).filter(Message.conversation_id == conversation_key).order_by(Message.timestamp).all()
-            
-            if not messages:
-                logger.info(f"No messages found in database for conversation {conversation_key}")
-                return []
-                
-            # Convert to the format used by conversation_history
-            history = []
-            for msg in messages:
-                history.append({
-                    "role": msg.role,
-                    "content": msg.content,
-                    "timestamp": msg.timestamp,
-                    "message_ts": msg.message_ts,
-                    "metadata": msg.meta_data or {}
-                })
-                
-            logger.info(f"Loaded {len(history)} messages from database for {conversation_key}")
-            return history
-    except Exception as e:
-        logger.error(f"Error loading conversation from database: {str(e)}")
-        return []
-
-# Function to save conversation to database
-def save_conversation_to_db(channel_id, thread_ts, messages):
-    """Save conversation history to database"""
-    if not messages:
-        return
-        
-    conversation_key = f"{channel_id}:{thread_ts}"
-    
-    try:
-        with get_db() as db:
-            # Check if conversation exists
-            conversation = db.query(Conversation).filter(Conversation.id == conversation_key).first()
-            
-            # Create conversation if it doesn't exist
-            if not conversation:
-                conversation = Conversation(
-                    id=conversation_key,
-                    channel_id=channel_id,
-                    thread_ts=thread_ts
-                )
-                db.add(conversation)
-                db.flush()
-            
-            # Get existing message timestamps to avoid duplicates
-            existing_timestamps = {m.timestamp for m in db.query(Message.timestamp).filter(Message.conversation_id == conversation_key).all()}
-            
-            # Add new messages
-            for msg in messages:
-                if msg["timestamp"] in existing_timestamps:
-                    continue
-                    
-                db_message = Message(
-                    conversation_id=conversation_key,
-                    role=msg["role"],
-                    content=msg["content"],
-                    timestamp=msg["timestamp"],
-                    message_ts=msg.get("message_ts"),
-                    meta_data=msg.get("metadata", {})
-                )
-                db.add(db_message)
-            
-            db.commit()
-            logger.info(f"Saved conversation to database: {conversation_key}")
-    except Exception as e:
-        logger.error(f"Error saving conversation to database: {str(e)}")
-
-def add_message_to_conversation(conversation_key, role, content, message_ts=None, metadata=None):
-    """Add a message to the conversation history."""
-    # Store only the raw message content without any formatting
-    if conversation_key not in conversation_history:
-        conversation_history[conversation_key] = []
-    
-    # Create the message object with raw content
-    message = {
-        "role": role,
-        "content": content,
-        "timestamp": time.time(),
-        "message_ts": message_ts,
-        "metadata": metadata
-    }
-    
-    conversation_history[conversation_key].append(message)
-    
-    # Save to database
-    try:
-        parts = conversation_key.split(":")
-        if len(parts) == 2:
-            channel_id, thread_ts = parts
-            save_conversation_to_db(channel_id, thread_ts, conversation_history[conversation_key])
-    except Exception as e:
-        logger.error(f"Error saving conversation to database: {str(e)}")
 
 # Add this function
 def check_app_health():

@@ -9,6 +9,7 @@ import logging
 from dotenv import load_dotenv
 from linear_rag_search import advanced_search
 from tabulate import tabulate
+from linear_rag_search import process_variable_references
 
 # Set up logging
 logging.basicConfig(
@@ -150,6 +151,40 @@ def main():
     print("\nBattle 2B - Semantic Search + SQL Filters:")
     results_2b = advanced_search(battle_2b)
     display_results(results_2b, "Semantic Search + SQL Filters (Data API + Harsh + Cycle 41)")
+
+
+    test_case_1 = {
+    'fields': ['assignee->name'],
+    'returned_fields': {
+        'assignee': 'group_field',
+        'completed_tasks': 'completed_tasks'
+    },
+    'filters': [
+        {
+            'field': 'cycle->name',
+            'operator': '=',
+            'value': 'Cycle 41'
+        }
+    ],
+    'grouping': 'assignee->name',
+    'aggregations': [
+        {
+            'type': 'count',
+            'field': '*',
+            'condition': {
+                'field': 'state',
+                'operator': '=',
+                'value': 'Done'
+            },
+            'alias': 'completed_tasks'
+        }
+    ],
+    'sorting': {
+        'field': 'completed_tasks',
+        'direction': 'DESC'
+    },
+    'limit': 1
+        }
 
     test_case_2 = {
     "fields": [
@@ -645,64 +680,6 @@ def main():
         logger.error(traceback.format_exc())
     
 
-def process_variable_references(query, step_results):
-    """
-    Process variable references in query values.
-    
-    Args:
-        query: The query spec to process
-        step_results: Dictionary of previous query results
-        
-    Returns:
-        Processed query with variable references resolved
-    """
-    processed_query = json.loads(json.dumps(query))  # Deep copy
-    
-    # Process filters that might contain variable references
-    if "filters" in processed_query:
-        # Create a list to keep track of filters to remove (if their value lists are empty)
-        filters_to_remove = []
-        
-        for i, filter_item in enumerate(processed_query["filters"]):
-            if "value" in filter_item and isinstance(filter_item["value"], str):
-                # Check if this is a variable reference
-                if filter_item["value"].startswith("{{") and filter_item["value"].endswith("}}"):
-                    # Extract variable reference
-                    ref = filter_item["value"][2:-2].strip()  # Remove {{ }} and whitespace
-                    
-                    # Handle reference with or without a field name
-                    if "." in ref:
-                        var_name, field_name = ref.split(".", 1)
-                    else:
-                        var_name, field_name = ref, None
-                    
-                    if var_name in step_results:
-                        values = [item.get(field_name) for item in step_results[var_name] if field_name in item]
-                        values = [v for v in values if v is not None]  # Filter out None values
-                        
-                        # Debug the values
-                        logger.info(f"Values for {ref}: {values}")
-                        
-                        if values:
-                            # For = ANY operator, PostgreSQL expects an array
-                            if filter_item.get("operator", "=") in ["= ANY", "IN"]:
-                                processed_query["filters"][i]["value"] = values
-                            else:
-                                # For other operators, take the first value
-                                processed_query["filters"][i]["value"] = values[0]
-                        else:
-                            # If no values found, mark this filter for removal
-                            logger.warning(f"Empty value list for reference {ref}, will skip this filter")
-                            filters_to_remove.append(i)
-                    else:
-                        logger.warning(f"Variable {var_name} not found in results, will skip this filter")
-                        filters_to_remove.append(i)
-        
-        # Remove filters with empty value lists (in reverse order to avoid index shifting)
-        for i in sorted(filters_to_remove, reverse=True):
-            processed_query["filters"].pop(i)
-    
-    return processed_query
 
 if __name__ == "__main__":
     main() 
