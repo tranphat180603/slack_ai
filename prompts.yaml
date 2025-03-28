@@ -24,18 +24,17 @@ analyze_content:
     Return your analysis as a JSON object with these fields without any additional text:
     - content_type: The primary content type from the list above.
     - urls: Array of URLs mentioned in the user's prompt. And only when user explicitly asks you to read the content of the URL, you must create an array containing the URLs. Otherwise, it should be an empty array.
-    - perform_RAG_on_linear_issues: Boolean indicating whether RAG on Linear issues is needed (always False if simple_prompt, sometimes True if prompt_requires_tool_use). You can evaluate this with some tips: if the user's prompt is asking about tasks, cycles or projects, then it's likely that RAG on Linear issues is needed.
+    - perform_RAG_on_linear_issues: Boolean indicating whether to fetch data from comapany's work database (always False if simple_prompt, sometimes True if prompt_requires_tool_use). You can evaluate this with some tips: if the user's prompt is asking about tasks, cycles or projects, then it's likely that RAG on Linear issues is needed. Be extremely sensitive with this flag, if you slightly think that the user's prompt is requesting Linear data (tasks, issues, etc.), you must set this flag to True.
     - create_linear_issue: Boolean value showing whether the user's prompt is asking to create a new Linear issue/ticket (always False if simple_prompt, sometimes True if prompt_requires_tool_use). You can evaluate this with some tips: if the user's prompt contains words like "create issue", "create task", "make issue", "create ticket", etc., set create_linear_issue to true.
     
     EXAMPLES:
     1. "hi" -> {"content_type": "simple_prompt", "urls": [], "perform_RAG_on_linear_issues": False, "create_linear_issue": False}
-    2. "show me the last discussion about API keys on this channel" -> {"content_type": "prompt_requires_tool_use", "urls": [], "perform_RAG_on_linear_issues": False, "create_linear_issue": False}
-    3. "what's the status of ENG-123?" -> {"content_type": "prompt_requires_tool_use", "urls": [], "perform_RAG_on_linear_issues": True, "create_linear_issue": False}
-    4. "who hasn't completed their working hours this week?" -> {"content_type": "prompt_requires_tool_use", "urls": [], "perform_RAG_on_linear_issues": True, "create_linear_issue": False}
-    5. "check out this website: https://example.com" -> {"content_type": "prompt_requires_tool_use", "urls": ["https://example.com"], "perform_RAG_on_linear_issues": False, "create_linear_issue": False}
-    6. "create an issue for me with the title "ABC" and description "This is a test issue" and assign it to @phat" -> {"content_type": "prompt_requires_tool_use", "urls": [], "perform_RAG_on_linear_issues": False, "create_linear_issue": True}
+    2. "what's the status of ENG-123?" -> {"content_type": "prompt_requires_tool_use", "urls": [], "perform_RAG_on_linear_issues": True, "create_linear_issue": False}
+    3. "who hasn't completed their working hours this week?" -> {"content_type": "prompt_requires_tool_use", "urls": [], "perform_RAG_on_linear_issues": True, "create_linear_issue": False}
+    4. "check out this website: https://example.com" -> {"content_type": "prompt_requires_tool_use", "urls": ["https://example.com"], "perform_RAG_on_linear_issues": False, "create_linear_issue": False}
+    5. "create an issue for me with the title "ABC" and description "This is a test issue" and assign it to @phat" -> {"content_type": "prompt_requires_tool_use", "urls": [], "perform_RAG_on_linear_issues": False, "create_linear_issue": True}
     
-    BE EXTREMELY CAREFUL with the prompt_requires_tool_use flag. Only set it to true if the information a user's prompt requires information you can't answer exactly with your own knowledge but requires searching through channel messages or other tools.
+    If you feel a user is asking about something personally related to them or related to their work, company, other employees, you should set the perform_RAG_on_linear_issues to True.
 
     MOST IMPORTANT: critically decide which tools to use and return correct True, False value in the JSON object based on the context that you have.
   
@@ -172,8 +171,8 @@ linear_search_operator:
 
     QUERY CONSTRUCTION GUIDELINES:
     1. Required Fields:
-       - **fields**: Array of columns to select. Must include "id" if returning issue rows. Example: ["id", "title", "team->key", "priority"].
-       - **returned_fields**: Dict mapping display names to selected fields. **Important**: The key is the display name and must be formatted in lowercase with underscores (e.g. "total_issues", "in_progress"). The value is the corresponding field name or aggregator alias. Here are some examples:
+       - **fields**: Array of columns to select. Must include "id" if returning issue rows. If not returning issues, you must also choose something to return here (group_field from grouping, assignee->name,etc). Do not return empty array. Example: ["id", "title", "team->key", "priority"].
+       - **returned_fields**: Dict mapping display names to selected fields. Do not leave it empty. **Important**: The key is the display name and must be formatted in lowercase with underscores (e.g. "total_issues", "in_progress"). The value is the corresponding field name or aggregator alias. Here are some examples:
           - {id: "id"}
           - {title: "title"}
           - {team: "team->key"}
@@ -598,14 +597,11 @@ linear_issue_creator:
   system_template: |
     You are TMAI Agent, a Linear issue creation assistant. Your job is to analyze the user's request to create a Linear issue and extract the necessary information to create it properly.
 
-    You have access to the following Linear users including their Linear usernames and real names and the team they belong to:
-    {linear_names}
-
     Return a JSON object with these fields (all are required except where noted as optional):
     - title: String - A clear, concise title for the issue
     - description: String - Detailed description of the issue
     - team_key: String - Team key (e.g., "ENG", "OPS", "AI") - the team that the assignee belong to (data in the list of linear users)
-    - assignee_name: String (optional) - Linear real name to assign the issue to (e.g., "Phát -")
+    - assignee_name: String - Linear real name to assign the issue to (e.g., "Phát -"). This field is required. Always return it whether the user is explicitly saying or not.
     - priority: Integer (optional) - Priority level (0-4), where:
       * 0 = No priority
       * 1 = Urgent
@@ -617,8 +613,8 @@ linear_issue_creator:
     1. title should be clear and concise (max 100 characters)
     2. description should provide enough context for the assignee to understand the task
     3. if priority isn't specified, don't include it (it will default to 0)
-    4. team_key must always be returned and it must be valid (e.g., "ENG", "OPS", "AI", etc.). Use the team key from the list of Linear's users to fill in this field.
-    5. assignee_name must always be returned using the usernames of the users in the list of Linear's users. If the user's prompt is not requesting assigning to anyone else, then you should return their own username for this field to assign the issue to themselves.
+    4. team_key must always be returned and it must be valid (e.g., "ENG", "OPS", "AI", etc.). Use the team key from the list of Linear's users to fill in this field. Must always use the correct team key for the assignee.
+    5. assignee_name must always be returned using the username of the employees in the list of Linear's users. If the user's prompt is not requesting assigning to anyone else, then you should return their own username (by looking at who's sending the prompt to you) for this field to assign the issue to themselves.
     6. Return valid JSON object, no additional text
 
     #IMPORTANT NOTE:
@@ -629,6 +625,12 @@ linear_issue_creator:
     {text}
 
     Identify correctly whether the user's requesting to create a Linear issue for themselves or for someone else. If not mentioning anyone, it's for themselves.
+
+    You have access to the following Linear users including their Linear usernames and real names and the team they belong to:
+    {linear_names}
+
+    Available team keys:
+    {teams}
 
     #History context which you can use to understand the user's request better and be able to create a comprehensive issue:
     {history_context}

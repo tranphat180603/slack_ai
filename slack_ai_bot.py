@@ -66,7 +66,7 @@ SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 LINEAR_API_KEY = os.environ.get("LINEAR_API_KEY", "")
 AI_RATE_LIMIT = int(os.environ.get("AI_RATE_LIMIT", "30"))  # Requests per minute
-AI_MODEL = os.environ.get("AI_MODEL", "gpt-4o-mini")
+AI_MODEL = os.environ.get("AI_MODEL", "gpt-4o")
 
 # Initialize Slack client
 slack_client = WebClient(token=SLACK_BOT_TOKEN)
@@ -1724,7 +1724,7 @@ async def process_mention_request(ai_request: AIRequest, thread_ts: str):
         try:
             content_analysis = await analyze_content(ai_request.text, "\n".join(history_context), sender_name=sender_name)
             logger.info(f"Content analysis: {content_analysis}")
-            
+
             # Manual check for Linear issue creation intent
             if not content_analysis.create_linear_issue:
                 # Keywords that strongly indicate issue creation intent
@@ -2614,7 +2614,7 @@ async def perform_linear_rag_search(query: Optional[str] = None, limit: int = 10
                 logger.info(f"Sending this user prompt to OpenAI: {user_prompt}")
 
                 #use different model for linear search
-                AI_MODEL = "o3-mini"
+                AI_MODEL = "o1-mini"
                 # Call OpenAI to analyze the query
                 client = openai.OpenAI(api_key=OPENAI_API_KEY)
                 try:
@@ -2677,146 +2677,82 @@ async def perform_linear_rag_search(query: Optional[str] = None, limit: int = 10
                             "fallback": "Using basic search due to parsing error"
                         }
                                         
-                    # Check if we're using the legacy format or the new advanced format
-                    if "requires_linear_search" in search_params:
-                        # Legacy format - convert to advanced format
-                        if not search_params.get("requires_linear_search", True):
-                            # If search is not required, return the company data directly
-                            logger.info("AI determined that Linear search is not needed, returning company data directly")
-                            return {
-                                "requires_linear_search": False,
-                                "results": [],
-                                "available_teams": teams,
-                                "available_cycles": cycles,
-                                "search_parameters": {
-                                    "team_key": None,
-                                    "cycle_name": None,
-                                    "assignee": None,
-                                    "query": query,
-                                    "limit": None
-                                },
-                                "query": query,
-                                "result_count": 0,
-                                "related_existing_company_data": search_params.get("related_existing_company_data")
-                            }
+                    #check if multi-step query
+                    
+                    if isinstance(search_params, list):
+                        logger.info(f"Executing multi-step query with {len(search_params)} steps")
                         
-                        # Add default filter to legacy search parameters
+                        # Process multi-step queries
+                        all_results = []
+                        step_results = {}
+                        final_results = None
+                        
+                        for i, step_query in enumerate(search_params):
+                            logger.info(f"Executing step {i+1} of multi-step query")
+                            
+                            # Extract the result_variable name if specified
+                            result_variable = step_query.pop("result_variable", f"query_{i+1}_result")
+                            
+                            # Process any variable references in the query
+                            processed_query = process_variable_references(step_query, step_results)
+                            
+                            # Execute the query
+                            step_result = advanced_search(processed_query)
+                            
+                            # Store the results for use by subsequent queries
+                            step_results[result_variable] = step_result.get("results", [])
+                            
+                            # Store all step results
+                            all_results.append({
+                                "step": i+1, 
+                                "results": step_result.get("results", []),
+                                "count": step_result.get("count", 0),
+                                "result_variable": result_variable
+                            })
+                            
+                            # The final step results will be returned as the main results
+                            if i == len(search_params) - 1:
+                                final_results = step_result
+                        
+                        # Return results from all steps
+                        return {
+                            "requires_linear_search": True,
+                            "is_multi_step": True,
+                            "results": final_results.get("results", []),
+                            "all_steps": all_results,
+                            "available_teams": teams,
+                            "available_cycles": cycles,
+                            "search_parameters": search_params,
+                            "query": query,
+                            "result_count": final_results.get("count", 0) if final_results else 0,
+                            "justification": "Multi-step query executed successfully",
+                            "column_names": final_results.get("column_names", []) if final_results else []
+                        }
+                    else:
+                        # Regular advanced format (single query)
+                        logger.info(f"Using advanced search with query: {search_params}")
+                        
+                        # Add default filter
                         search_params["filters"] = search_params.get("filters", [])
                         search_params["filters"].append(default_filter)
                         
-                        # Log the legacy search parameters
-                        team_key = search_params.get("team_key")
-                        cycle_name = search_params.get("cycle_name")
-                        assignee_name = search_params.get("assignee_name")
-                        search_limit = search_params.get("limit", limit)
-                        search_query = search_params.get("search_query", query)
+                        # Execute the advanced search
+                        advanced_results = advanced_search(search_params)
+                        logger.info(f"Advanced search results: {advanced_results}")
                         
-                        logger.info(f"Using legacy search with parameters: team={team_key}, cycle={cycle_name}, assignee={assignee_name}, limit={search_limit}, query={search_query}")
-                        
-                        # Perform the legacy search
-                        search_results = search_issues(
-                            query=search_query,
-                            team_key=team_key,
-                            cycle_name=cycle_name,
-                            assignee_name=assignee_name,
-                            limit=search_limit
-                        )
-                        
-                        # Return the results and metadata directly
+                        # Return the results and metadata
                         return {
                             "requires_linear_search": True,
-                            "results": search_results,
+                            "results": advanced_results.get("results", []),
                             "available_teams": teams,
                             "available_cycles": cycles,
-                            "search_parameters": {
-                                "team_key": team_key,
-                                "cycle_name": cycle_name,
-                                "assignee": assignee_name,
-                                "query": search_query,
-                                "limit": search_limit
-                            },
+                            "search_parameters": search_params,
                             "query": query,
-                            "result_count": len(search_results),
-                            "related_existing_company_data": search_params.get("related_existing_company_data")
+                            "result_count": advanced_results.get("count", 0),
+                            "query_type": search_params.get("query_type"),
+                            "justification": search_params.get("justification"),
+                            "column_names": advanced_results.get("column_names", [])
                         }
-                    else:
-                        # Check if this is a multi-step query (an array of queries)
-                        is_multi_step = isinstance(search_params, list)
-                        
-                        if is_multi_step:
-                            logger.info(f"Executing multi-step query with {len(search_params)} steps")
-                            
-                            # Process multi-step queries
-                            all_results = []
-                            step_results = {}
-                            final_results = None
-                            
-                            for i, step_query in enumerate(search_params):
-                                logger.info(f"Executing step {i+1} of multi-step query")
-                                
-                                # Extract the result_variable name if specified
-                                result_variable = step_query.pop("result_variable", f"query_{i+1}_result")
-                                
-                                # Process any variable references in the query
-                                processed_query = process_variable_references(step_query, step_results)
-                                
-                                # Execute the query
-                                step_result = advanced_search(processed_query)
-                                
-                                # Store the results for use by subsequent queries
-                                step_results[result_variable] = step_result.get("results", [])
-                                
-                                # Store all step results
-                                all_results.append({
-                                    "step": i+1, 
-                                    "results": step_result.get("results", []),
-                                    "count": step_result.get("count", 0),
-                                    "result_variable": result_variable
-                                })
-                                
-                                # The final step results will be returned as the main results
-                                if i == len(search_params) - 1:
-                                    final_results = step_result
-                            
-                            # Return results from all steps
-                            return {
-                                "requires_linear_search": True,
-                                "is_multi_step": True,
-                                "results": final_results.get("results", []),
-                                "all_steps": all_results,
-                                "available_teams": teams,
-                                "available_cycles": cycles,
-                                "search_parameters": search_params,
-                                "query": query,
-                                "result_count": final_results.get("count", 0) if final_results else 0,
-                                "justification": "Multi-step query executed successfully",
-                                "column_names": final_results.get("column_names", []) if final_results else []
-                            }
-                        else:
-                            # Regular advanced format (single query)
-                            logger.info(f"Using advanced search with query: {search_params}")
-                            
-                            # Add default filter
-                            search_params["filters"] = search_params.get("filters", [])
-                            search_params["filters"].append(default_filter)
-                            
-                            # Execute the advanced search
-                            advanced_results = advanced_search(search_params)
-                            logger.info(f"Advanced search results: {advanced_results}")
-                            
-                            # Return the results and metadata
-                            return {
-                                "requires_linear_search": True,
-                                "results": advanced_results.get("results", []),
-                                "available_teams": teams,
-                                "available_cycles": cycles,
-                                "search_parameters": search_params,
-                                "query": query,
-                                "result_count": advanced_results.get("count", 0),
-                                "query_type": search_params.get("query_type"),
-                                "justification": search_params.get("justification"),
-                                "column_names": advanced_results.get("column_names", [])
-                            }
                         
                 except Exception as parse_error:
                     logger.error(f"Error parsing AI response: {parse_error}")
@@ -2874,9 +2810,7 @@ async def generate_linear_issue(query: str, history_context: str, sender_name: s
             openai_limiter.wait_if_needed()
             
         linear_names = get_linear_names()
-        create_issue_system_prompt = PROMPTS.get("linear_issue_creator", {}).get("system", "").format(
-            linear_names=linear_names
-        )
+        create_issue_system_prompt = PROMPTS.get("linear_issue_creator", {}).get("system", "")
         if not create_issue_system_prompt:
             create_issue_system_prompt = """You are a Linear issue creator. You must respond with valid JSON containing the following fields:
             {
@@ -2889,8 +2823,12 @@ async def generate_linear_issue(query: str, history_context: str, sender_name: s
         create_issue_user_prompt = PROMPTS.get("linear_issue_creator", {}).get("user_template", "").format(
             text=query,
             history_context=history_context,
-            sender_name=sender_name
+            sender_name=sender_name,
+            linear_names=linear_names,
+            teams = ["OPS", "ENG", "AI", "PRO", "RES", "MKT"]
         )
+
+        logger.info(f"Create issue system prompt: {create_issue_user_prompt}")
         
         # Call OpenAI to analyze the query
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
@@ -2934,13 +2872,17 @@ async def generate_linear_issue(query: str, history_context: str, sender_name: s
             
         # Create issue with default priority if not specified
         created_issue = await linear_client.create_linear_issue(
-            title=linear_issue_args["title"],
-            description=linear_issue_args.get("description", ""),  # Default to empty string if missing
-            team_key=linear_issue_args["team_key"],
-            priority=linear_issue_args.get("priority", 0)  # Default to 0 if missing
+            title=linear_issue_args.get("title"),
+            description=linear_issue_args.get("description"),
+            assignee_name=linear_issue_args.get("assignee"),
+            team_key=linear_issue_args.get("team_key"),
+            priority=linear_issue_args.get("priority")
         )
         
-        return created_issue
+        if created_issue.get("success"):
+            return created_issue.get("issue")
+        else:
+            return "Error, can not create issue right now."
 
     except Exception as e:
         logger.error(f"Error generating Linear issue: {str(e)}")
@@ -3269,10 +3211,7 @@ async def startup_event():
     asyncio.create_task(run_db_cleanup())
     logger.info("Scheduled database cleanup task started")
 
-# Call this function before starting the app
+
 if __name__ == "__main__":
-    # Run health checks
-    check_app_health()
-    
-    # Start the app
     uvicorn.run(app, host="0.0.0.0", port=8000)
+    # asyncio.run(perform_linear_rag_search("who's the most productive engineer this cycle?"))

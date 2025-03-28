@@ -77,114 +77,122 @@ def main():
     """Run test queries from prompts.yaml examples."""
     logger.info("Testing Linear RAG advanced search with example queries...")
     
-    # Battle 1A: Semantic search only for Ahmed's agent-related issues
-    battle_1a = {
-        "fields": ["title", "state", "assignee->name", "description"],
-        "returned_fields": {
-            "Title": "title",
-            "State": "state",
-            "Assignee": "assignee->name",
-        },
-        "semantic_query": "agent",
-        "limit": 20
-    }
+    # # Battle 1A: Semantic search only for Ahmed's agent-related issues
+    # battle_1a = {
+    #     "fields": ["title", "state", "assignee->name", "description"],
+    #     "returned_fields": {
+    #         "Title": "title",
+    #         "State": "state",
+    #         "Assignee": "assignee->name",
+    #     },
+    #     "semantic_query": "agent",
+    #     "limit": 20
+    # }
 
-    # Battle 1B: Semantic search + SQL filters for Ahmed's agent-related issues
-    battle_1b = {
-        "fields": ["title", "state", "assignee->name", "description"],
-        "returned_fields": {
-            "Title": "title",
-            "State": "state",
-            "Assignee": "assignee->name",
-        },
-        "filters": [
-            {"field": "assignee->name", "operator": "=", "value": "Ahmed Hamdy"},
-            {"field": "cycle->name", "operator": "=", "value": "Cycle 41"}
-        ],
-        "semantic_query": "agent",
-        "limit": 20
-    }
+    # # Battle 1B: Semantic search + SQL filters for Ahmed's agent-related issues
+    # battle_1b = {
+    #     "fields": ["title", "state", "assignee->name", "description"],
+    #     "returned_fields": {
+    #         "Title": "title",
+    #         "State": "state",
+    #         "Assignee": "assignee->name",
+    #     },
+    #     "filters": [
+    #         {"field": "assignee->name", "operator": "=", "value": "Ahmed Hamdy"},
+    #         {"field": "cycle->name", "operator": "=", "value": "Cycle 41"}
+    #     ],
+    #     "semantic_query": "agent",
+    #     "limit": 20
+    # }
 
-    # Battle 2A: Semantic search only for Data API issues
-    battle_2a = {
-        "fields": ["title", "state", "assignee->name", "description"],
-        "returned_fields": {
-            "Title": "title",
-            "State": "state",
-            "Assignee": "assignee->name",
-        },
-        "semantic_query": "Data API",
-        "limit": 20
-    }
+    # # Battle 2A: Semantic search only for Data API issues
+    # battle_2a = {
+    #     "fields": ["title", "state", "assignee->name", "description"],
+    #     "returned_fields": {
+    #         "Title": "title",
+    #         "State": "state",
+    #         "Assignee": "assignee->name",
+    #     },
+    #     "semantic_query": "Data API",
+    #     "limit": 20
+    # }
 
-    # Battle 2B: Semantic search + SQL filters for Data API issues
-    battle_2b = {
-        "fields": ["title", "state", "assignee->name", "description"],
-        "returned_fields": {
-            "Title": "title",
-            "State": "state",
-            "Assignee": "assignee->name",
-        },
-        "filters": [
-            {"field": "assignee->name", "operator": "=", "value": "Harsh Gautam"},
-            {"field": "cycle->name", "operator": "=", "value": "Cycle 41"}
-        ],
-        "semantic_query": "Data API",
-        "limit": 20
-    }
+    # # Battle 2B: Semantic search + SQL filters for Data API issues
+    # battle_2b = {
+    #     "fields": ["title", "state", "assignee->name", "description"],
+    #     "returned_fields": {
+    #         "Title": "title",
+    #         "State": "state",
+    #         "Assignee": "assignee->name",
+    #     },
+    #     "filters": [
+    #         {"field": "assignee->name", "operator": "=", "value": "Harsh Gautam"},
+    #         {"field": "cycle->name", "operator": "=", "value": "Cycle 41"}
+    #     ],
+    #     "semantic_query": "Data API",
+    #     "limit": 20
+    # }
 
-    # Run the battles
-    print("\nBattle 1: Ahmed's Agent-Related Issues")
-    print("\nBattle 1A - Semantic Search Only:")
-    results_1a = advanced_search(battle_1a)
-    display_results(results_1a, "Semantic Search Only (agent)")
+    # # Run the battles
+    # print("\nBattle 1: Ahmed's Agent-Related Issues")
+    # print("\nBattle 1A - Semantic Search Only:")
+    # results_1a = advanced_search(battle_1a)
+    # display_results(results_1a, "Semantic Search Only (agent)")
     
-    print("\nBattle 1B - Semantic Search + SQL Filters:")
-    results_1b = advanced_search(battle_1b)
-    display_results(results_1b, "Semantic Search + SQL Filters (agent + Ahmed + Cycle 41)")
+    # print("\nBattle 1B - Semantic Search + SQL Filters:")
+    # results_1b = advanced_search(battle_1b)
+    # display_results(results_1b, "Semantic Search + SQL Filters (agent + Ahmed + Cycle 41)")
     
-    print("\nBattle 2: Data API Issues")
-    print("\nBattle 2A - Semantic Search Only:")
-    results_2a = advanced_search(battle_2a)
-    display_results(results_2a, "Semantic Search Only (Data API)")
+    # print("\nBattle 2: Data API Issues")
+    # print("\nBattle 2A - Semantic Search Only:")
+    # results_2a = advanced_search(battle_2a)
+    # display_results(results_2a, "Semantic Search Only (Data API)")
     
-    print("\nBattle 2B - Semantic Search + SQL Filters:")
-    results_2b = advanced_search(battle_2b)
-    display_results(results_2b, "Semantic Search + SQL Filters (Data API + Harsh + Cycle 41)")
+    # print("\nBattle 2B - Semantic Search + SQL Filters:")
+    # results_2b = advanced_search(battle_2b)
+    # display_results(results_2b, "Semantic Search + SQL Filters (Data API + Harsh + Cycle 41)")
 
 
     test_case_1 = {
-    'fields': ['assignee->name'],
-    'returned_fields': {
-        'assignee': 'group_field',
-        'completed_tasks': 'completed_tasks'
-    },
-    'filters': [
-        {
-            'field': 'cycle->name',
-            'operator': '=',
-            'value': 'Cycle 41'
-        }
-    ],
-    'grouping': 'assignee->name',
-    'aggregations': [
-        {
-            'type': 'count',
-            'field': '*',
-            'condition': {
-                'field': 'state',
-                'operator': '=',
-                'value': 'Done'
+        "fields": ["assignee->name"],
+        "returned_fields": {
+            "total_issues": "total_issues",
+            "total_achievements": "total_achievements",
+            "assignee": "group_field"
+        },
+        "filters": [
+            {
+            "field": "assignee->name",
+            "operator": "=",
+            "value": "Phát -"
+            }
+        ],
+        "grouping": "assignee->name",
+        "aggregations": [
+            {
+            "type": "count",
+            "field": "*",
+            "alias": "total_issues"
             },
-            'alias': 'completed_tasks'
+            {
+            "type": "count",
+            "field": "*",
+            "condition": {
+                "field": "state",
+                "operator": "=",
+                "value": "Done"
+            },
+            "alias": "total_achievements"
+            }
+        ]
         }
-    ],
-    'sorting': {
-        'field': 'completed_tasks',
-        'direction': 'DESC'
-    },
-    'limit': 1
-        }
+
+
+
+
+
+
+
 
     test_case_2 = {
     "fields": [
@@ -468,7 +476,7 @@ def main():
         
         # Test Case 1
         results_1 = advanced_search(test_case_1)
-        display_results(results_1, "Test Case 1: Urgent and High Priority Issues")
+        display_results(results_1, "Test Case 1: TESING VARIOUS THINGS")
         
         # Test Case 2
         results_2 = advanced_search(test_case_2)
