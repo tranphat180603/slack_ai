@@ -3213,5 +3213,5 @@ async def startup_event():
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-    # asyncio.run(perform_linear_rag_search("who's the most productive engineer this cycle?"))
+    # uvicorn.run(app, host="0.0.0.0", port=8000)
+    asyncio.run(perform_linear_rag_search("who's the most productive engineer this cycle?"))

@@ -153,39 +153,7 @@ def main():
     # display_results(results_2b, "Semantic Search + SQL Filters (Data API + Harsh + Cycle 41)")
 
 
-    test_case_1 = {
-        "fields": ["assignee->name"],
-        "returned_fields": {
-            "total_issues": "total_issues",
-            "total_achievements": "total_achievements",
-            "assignee": "group_field"
-        },
-        "filters": [
-            {
-            "field": "assignee->name",
-            "operator": "=",
-            "value": "Phát -"
-            }
-        ],
-        "grouping": "assignee->name",
-        "aggregations": [
-            {
-            "type": "count",
-            "field": "*",
-            "alias": "total_issues"
-            },
-            {
-            "type": "count",
-            "field": "*",
-            "condition": {
-                "field": "state",
-                "operator": "=",
-                "value": "Done"
-            },
-            "alias": "total_achievements"
-            }
-        ]
-        }
+    test_case_1 = {'fields': ['id', 'title', 'state', 'priority'], 'returned_fields': {'id': 'id', 'title': 'title', 'state': 'state', 'priority': 'priority'}, 'filters': [{'field': 'assignee->name', 'operator': '=', 'value': 'Phát -'}, {'field': 'state', 'operator': '!=', 'value': 'Done'}, {'field': 'updated_at', 'operator': '>=', 'value': "NOW() - INTERVAL '7 days'"}], 'sorting': {'field': 'priority', 'direction': 'ASC'}, 'limit': 20}
 
 
 
