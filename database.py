@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 # Get database URL from environment variable
 # Fall back to linear_rag database if DATABASE_URL isn't set
-DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://postgres:phatdeptrai123@localhost:5432/linear_rag')
+DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://phattran:phatdeptrai123@localhost:5432/linear_rag')
 
 # Create engine with connection pooling
 engine = create_engine(

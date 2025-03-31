@@ -119,7 +119,7 @@ CONVERSATION_EXPIRY = 24  # hours
 slack_users = [
     {'display_name': 'Talha', 'real_name': 'Talha Ahmad', 'title': 'Operations Manager', 'team': 'OPS'},
     {'display_name': 'Val', 'real_name': 'Valentine Enedah', 'title': 'CX', 'team': 'PRO'},
-    {'display_name': 'Ian Balina', 'real_name': 'Ian Balina', 'title': 'Founder and CEO', 'team': None},
+    {'display_name': 'Ian Balina', 'real_name': 'Ian Balina', 'title': 'Founder and CEO', 'team': 'CEO'},
     {'display_name': 'Harsh', 'real_name': 'Harsh', 'title': 'Senior Full Stack Engineer', 'team': 'ENG'},
     {'display_name': '', 'real_name': 'Andrew Tran', 'title': 'Data Engineer', 'team': 'AI'},
     {'display_name': 'Ayush Jalan', 'real_name': 'Ayush Jalan', 'title': 'Blockchain Engineer', 'team': 'ENG'},
@@ -127,7 +127,7 @@ slack_users = [
     {'display_name': 'Bartosz', 'real_name': 'Bartosz Kusnierczak', 'title': 'Passion never fail', 'team': 'ENG'},
     {'display_name': 'Jake', 'real_name': 'Jake Nguyen', 'title': 'Senior Data Engineer', 'team': 'AI'},
     {'display_name': 'Roshan Ganesh', 'real_name': 'Roshan Ganesh', 'title': 'Marketing Lead', 'team': 'MKT'},
-    {'display_name': 'Sam Monac', 'real_name': 'Sam Monac', 'title': 'Chief Product Officer', 'team': None},
+    {'display_name': 'Sam Monac', 'real_name': 'Sam Monac', 'title': 'Chief Product Officer', 'team': 'COO'},
     {'display_name': 'Favour', 'real_name': 'Favour Ikwan', 'title': 'Chief Operations Officer', 'team': 'OPS'},
     {'display_name': 'Suleman Tariq', 'real_name': 'Suleman Tariq', 'title': 'Tech Lead', 'team': 'ENG'},
     {'display_name': 'Zaiying Li', 'real_name': 'Zaiying Li', 'title': '', 'team': 'OPS'},

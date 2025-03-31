@@ -355,12 +355,11 @@ X_BEARER_TOKEN=your_twitter_bearer_token
 # Configuration
 AI_MODEL=o1-mini
 AI_RATE_LIMIT=30
-OUTPUT_SERVER_URL=http://localhost:8080/receive
 
 # Database Configuration for Linear Integration
 POSTGRES_HOST=localhost
 POSTGRES_DB=linear_rag
-POSTGRES_USER=postgres
+POSTGRES_USER=phattran
 POSTGRES_PASSWORD=yourpassword
 ```
 

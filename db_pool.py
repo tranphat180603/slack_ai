@@ -18,6 +18,7 @@ logging.basicConfig(
 logger = logging.getLogger("db_pool")
 
 class DatabasePool:
+
     _pool = None
     
     @classmethod
@@ -33,7 +34,7 @@ class DatabasePool:
                 maxconn,
                 host=os.environ.get("POSTGRES_HOST", "localhost"),
                 database=os.environ.get("POSTGRES_DB", "linear_rag"),
-                user=os.environ.get("POSTGRES_USER", "postgres"),
+                user=os.environ.get("POSTGRES_USER", "phattran"),
                 password=os.environ.get("POSTGRES_PASSWORD", "phatdeptrai123"),
                 port=5432
             )

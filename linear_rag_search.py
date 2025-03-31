@@ -34,7 +34,7 @@ def get_db_connection():
     """Create a connection to the PostgreSQL database."""
     host = os.environ.get("POSTGRES_HOST", "localhost")
     database = os.environ.get("POSTGRES_DB", "linear_rag")
-    user = os.environ.get("POSTGRES_USER", "postgres")
+    user = os.environ.get("POSTGRES_USER", "phattran")
     password = os.environ.get("POSTGRES_PASSWORD", "phatdeptrai123")
     
     try:
@@ -831,7 +831,7 @@ def advanced_search(query_spec: Dict[str, Any]) -> Dict[str, Any]:
                     # So we need embedding_vector as a param. We'll put it at the end or front.
                     params.insert(0, embedding_vector)  # or append
                     # Then we must adjust the reference in the SELECT to use that param index 
-                    # (But in Postgres, it's fine as placeholders are matched sequentially.)
+                    # (But in phattran, it's fine as placeholders are matched sequentially.)
                 
                 # ---------------------------------------------------------
                 # 3) ORDER BY if not in the special distinct_on+per_group_limit

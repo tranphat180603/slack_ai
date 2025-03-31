@@ -155,13 +155,6 @@ def main():
 
     test_case_1 = {'fields': ['id', 'title', 'state', 'priority'], 'returned_fields': {'id': 'id', 'title': 'title', 'state': 'state', 'priority': 'priority'}, 'filters': [{'field': 'assignee->name', 'operator': '=', 'value': 'Phát -'}, {'field': 'state', 'operator': '!=', 'value': 'Done'}, {'field': 'updated_at', 'operator': '>=', 'value': "NOW() - INTERVAL '7 days'"}], 'sorting': {'field': 'priority', 'direction': 'ASC'}, 'limit': 20}
 
-
-
-
-
-
-
-
     test_case_2 = {
     "fields": [
         "id",
