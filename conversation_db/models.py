@@ -16,6 +16,13 @@ class Conversation(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     meta_data = Column(JSON, nullable=True)  # For storing any additional metadata
 
+    def __init__(self, channel_id, thread_ts, **kwargs):
+        """Initialize with composite id from channel_id and thread_ts"""
+        super().__init__(**kwargs)
+        self.id = f"{channel_id}:{thread_ts}"
+        self.channel_id = channel_id
+        self.thread_ts = thread_ts
+
     # Relationship with messages
     messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan")
 

@@ -33,7 +33,7 @@ class DatabasePool:
                 minconn,
                 maxconn,
                 host=os.environ.get("POSTGRES_HOST", "localhost"),
-                database=os.environ.get("POSTGRES_DB", "linear_rag"),
+                database=os.environ.get("POSTGRES_DB", "tmai_db"),
                 user=os.environ.get("POSTGRES_USER", "phattran"),
                 password=os.environ.get("POSTGRES_PASSWORD", "phatdeptrai123"),
                 port=5432
@@ -85,4 +85,7 @@ def get_db_connection():
         yield conn
     finally:
         if conn is not None:
-            DatabasePool.return_connection(conn) 
+            DatabasePool.return_connection(conn)
+
+# Initialize the pool automatically when the module is imported
+DatabasePool.initialize(minconn=1, maxconn=10) 

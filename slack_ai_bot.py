@@ -1,41 +1,41 @@
+import sys
+import codecs
+import yaml
+import dataclasses
+import re
+import os
+import logging
+import datetime
+from collections import defaultdict
+from dotenv import load_dotenv
+import traceback
 import uvicorn
 import requests
 import fastapi
 from fastapi import Request, Form, BackgroundTasks, Response
 from bs4 import BeautifulSoup
-import re
-import os
-import logging
-import datetime
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any, Union
-import tweepy
-from fastapi import HTTPException
-import openai
-import json
-from slack_sdk import WebClient
-from slack_sdk.errors import SlackApiError
 import base64
 import time
 import aiohttp
 import asyncio
-from urllib.parse import urlparse
-from github import Github
-from linear_client import LinearClient
-import sys
-import codecs
-import yaml
-import dataclasses
-from collections import defaultdict
-from dotenv import load_dotenv
-import traceback
-from database import get_db, check_db_connection, init_db, cleanup_old_conversations
-from models import Conversation, Message, Base
-from rate_limiter import global_limiter, slack_limiter, linear_limiter, openai_limiter
+import json
 from logging.handlers import RotatingFileHandler
+from urllib.parse import urlparse
 
-from linear_rag_search import process_variable_references
+import tweepy
+from fastapi import HTTPException
+import openai
+from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
+from github import Github
 
+from linear_db.linear_client import LinearClient
+from conversation_db.database import get_db, check_db_connection, init_db, cleanup_old_conversations
+from conversation_db.models import Conversation, Message, Base
+from rate_limiter import global_limiter, slack_limiter, linear_limiter, openai_limiter
+from utils import safe_append, format_for_slack
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -116,48 +116,6 @@ conversation_history = defaultdict(list)
 # Maximum age of conversation history in memory (in hours)
 CONVERSATION_EXPIRY = 24  # hours
 
-slack_users = [
-    {'display_name': 'Talha', 'real_name': 'Talha Ahmad', 'title': 'Operations Manager', 'team': 'OPS'},
-    {'display_name': 'Val', 'real_name': 'Valentine Enedah', 'title': 'CX', 'team': 'PRO'},
-    {'display_name': 'Ian Balina', 'real_name': 'Ian Balina', 'title': 'Founder and CEO', 'team': 'CEO'},
-    {'display_name': 'Harsh', 'real_name': 'Harsh', 'title': 'Senior Full Stack Engineer', 'team': 'ENG'},
-    {'display_name': '', 'real_name': 'Andrew Tran', 'title': 'Data Engineer', 'team': 'AI'},
-    {'display_name': 'Ayush Jalan', 'real_name': 'Ayush Jalan', 'title': 'Blockchain Engineer', 'team': 'ENG'},
-    {'display_name': 'Drich', 'real_name': 'Raldrich Oracion', 'title': 'Customer Success', 'team': 'PRO'},
-    {'display_name': 'Bartosz', 'real_name': 'Bartosz Kusnierczak', 'title': 'Passion never fail', 'team': 'ENG'},
-    {'display_name': 'Jake', 'real_name': 'Jake Nguyen', 'title': 'Senior Data Engineer', 'team': 'AI'},
-    {'display_name': 'Roshan Ganesh', 'real_name': 'Roshan Ganesh', 'title': 'Marketing Lead', 'team': 'MKT'},
-    {'display_name': 'Sam Monac', 'real_name': 'Sam Monac', 'title': 'Chief Product Officer', 'team': 'COO'},
-    {'display_name': 'Favour', 'real_name': 'Favour Ikwan', 'title': 'Chief Operations Officer', 'team': 'OPS'},
-    {'display_name': 'Suleman Tariq', 'real_name': 'Suleman Tariq', 'title': 'Tech Lead', 'team': 'ENG'},
-    {'display_name': 'Zaiying Li', 'real_name': 'Zaiying Li', 'title': '', 'team': 'OPS'},
-    {'display_name': 'Hemank', 'real_name': 'Hemank', 'title': '', 'team': 'RES'},
-    {'display_name': 'Ben', 'real_name': 'Ben Diagi', 'title': 'Product Manager', 'team': 'PRO'},
-    {'display_name': 'Chao', 'real_name': 'Chao Li', 'title': 'Quantitative Analyst', 'team': 'AI'},
-    {'display_name': 'Abdullah', 'real_name': 'Abdullah', 'title': 'Head Of Investment', 'team': 'RES'},
-    {'display_name': 'Manav', 'real_name': 'Manav Garg', 'title': 'Blockchain Engineer', 'team': 'RES'},
-    {'display_name': 'Vasilis', 'real_name': 'Vasilis Kotopoulos', 'title': 'AI Team Lead', 'team': 'AI'},
-    {'display_name': 'Olaitan Akintunde', 'real_name': 'Olaitan Akintunde', 'title': 'Video Editor and Motion Designer', 'team': 'MKT'},
-    {'display_name': 'Chetan Kale', 'real_name': 'Chetan Kale', 'title': '', 'team': 'RES'},
-    {'display_name': 'ayo', 'real_name': 'ayo', 'title': '', 'team': 'PRO'},
-    {'display_name': 'Özcan İlhan', 'real_name': 'Özcan İlhan', 'title': '', 'team': 'ENG'},
-    {'display_name': 'Faith Oladejo', 'real_name': 'Faith Oladejo', 'title': '', 'team': 'PRO'},
-    {'display_name': 'Taf', 'real_name': 'Tafcir Majumder', 'title': 'Head Of Business Development', 'team': 'MKT'},
-    {'display_name': 'Caleb N', 'real_name': 'Caleb', 'title': '', 'team': 'MKT'},
-    {'display_name': 'divine', 'real_name': 'Divine Anthony', 'title': 'Devops', 'team': 'ENG'},
-    {'display_name': 'Williams', 'real_name': 'Williams Williams', 'title': 'Senior Fullstack Engineer', 'team': 'ENG'},
-    {'display_name': 'Anki Truong', 'real_name': 'Truong An (Anki)', 'title': '', 'team': 'ENG'},
-    {'display_name': 'Ryan', 'real_name': 'Ryan Barcelona', 'title': 'Freelancer', 'team': 'MKT'},
-    {'display_name': 'Phát -', 'real_name': 'Phát -', 'title': '', 'team': 'OPS'},
-    {'display_name': 'AhmedHamdy', 'real_name': 'AhmedHamdy', 'title': 'Senior Data Scientist/ML Engineer', 'team': 'AI'},
-    {'display_name': 'Grady', 'real_name': 'Grady', 'title': 'Data Scientist/AI Engineer', 'team': 'AI'},
-    {'display_name': 'Khadijah', 'real_name': 'Khadijah Shogbuyi', 'title': '', 'team': 'OPS'},
-    {'display_name': 'Talha Cagri', 'real_name': 'Talha Cagri Kotcioglu', 'title': 'Quantitative Analyst', 'team': 'AI'},
-    {'display_name': 'Agustín Gamoneda', 'real_name': 'Agustín Gamoneda', 'title': '', 'team': 'MKT'},
-    {'display_name': 'Peterson', 'real_name': 'Peterson Nwoko', 'title': 'Sr DevOps/SRE Engineer', 'team': 'ENG'}
-]
-
-
 app = fastapi.FastAPI()
 
 class ProcessedContent(BaseModel):
@@ -192,139 +150,73 @@ class ContentAnalysisResult:
         if self.urls is None:
             self.urls = []
 
-def format_for_slack(text: str) -> str:
-    """
-    Convert standard markdown formatting to Slack-compatible mrkdwn formatting.
-    
-    Args:
-        text: Text with potential markdown formatting
-        
-    Returns:
-        Text with Slack-compatible formatting
-    """
-    if not text:
-        return text
-        
-    # Replace double asterisks with single (for bold)
-    text = re.sub(r'\*\*([^*]+)\*\*', r'*\1*', text)
-    
-    # Replace double underscores with single (for italic)
-    text = re.sub(r'__([^_]+)__', r'_\1_', text)
-    
-    # Replace markdown headers with bold text
-    text = re.sub(r'^#{1,6}\s+(.+)$', r'*\1*', text, flags=re.MULTILINE)
-    
-    # Replace triple backticks with single backticks for inline code
-    text = re.sub(r'```([^`]+)```', r'`\1`', text)
-    
-    # Fix numbered lists (ensure there's a space after the period)
-    text = re.sub(r'^(\d+)\.([^\s])', r'\1. \2', text, flags=re.MULTILINE)
-    
-    # Fix bullet points (ensure there's a space after the asterisk)
-    text = re.sub(r'^\*([^\s])', r'* \1', text, flags=re.MULTILINE)
-    
-    # Remove language specifiers from code blocks
-    text = re.sub(r'```[a-zA-Z0-9]+\n', r'```\n', text)
-    
-    return text
-
 @app.post("/slack/ai_command")
 def ai_command(request: Request):
     return {"message": "AI command received"}
 #holding for now
 
 
-def get_slack_users_list():
-    """
-    Get the list of all users in the Slack workspace.
-    """
-    try:
-        # Apply rate limiting for Slack API
-        if not slack_limiter.check_rate_limit():
-            logger.warning("Slack API rate limit exceeded, waiting...")
-            slack_limiter.wait_if_needed()
-        
-        response = slack_client.users_list()
-        members = response.get("members")
-        valid_users = []
-        for member in members:
-            if member.get("deleted") == False and member.get("is_bot") == False and member.get("is_email_confirmed") == True and member.get("is_primary_owner") == False:
-                valid_user = {
-                    "display_name": "",
-                    "real_name": "",
-                    "title": "",
-                    "team": ""
-                }
-                valid_user["display_name"] = member.get("profile", {}).get("display_name")
-                valid_user["real_name"] = member.get("profile", {}).get("real_name")
-                valid_user["title"] = member.get("profile", {}).get("title")
-                valid_user["team"] = member.get("team")
-                valid_users.append(valid_user)
-        return valid_users
-    except SlackApiError as e:
-        logger.error(f"Slack API error: {e}")
-        return []
 
-def get_linear_names():
+def parse_user_mentions(text: str, use_cache: bool = True) -> str:
     """
-    Get the list of all users in the Linear workspace.
+    Convert Slack user mentions (<@U123ABC>) to their actual display names.
+    
+    Args:
+        text: The text containing user mentions
+        use_cache: Whether to use cached user info (default: True)
+    
+    Returns:
+        Text with user mentions replaced by display names
     """
-    linear_users = []
-    raw_list =  [
-            "@agustin: agustin@tokenmetrics.com: MKT",
-            "@ahmedhamdy: Ahmed Hamdy: AI",
-            "@andrew: Andrew Tran: AI",
-            "@ankit: Dao Truong An: ENG",
-            "@ashutosh: Ashutosh: ENG",
-            "@ayo: Ayo: PRO",
-            "@ayush: Ayush Jalan",
-            "@bartosz: Bartosz Kusnierczak: ENG",
-            "@ben: Ben Diagi: PRO",
-            "@caleb: Caleb Nnamani: MKT",
-            "@chao: Chao Li: AI",
-            "@chetan: Chetan Kale",
-            "@divine: Divine Anthony: ENG",
-            "@faith: Faith Oladejo: PRO",
-            "@favour: Favour Ikwan: OPS",
-            "@grady: Grady Matthias Oktavian: AI",
-            "@harshg: Harsh Gautam: ENG",
-            "@hemank: Hemank Sharma",
-            "@ian: Ian Balina",
-            "@jake: Jake Nguyen: AI",
-            "@khadijah: khadijah@tokenmetrics.com: OPS",
-            "@manav: Manav Garg: ENG",
-            "@noel: Emanuel Cruz: MKT",
-            "@olaitan: Olaitan Akintunde: MKT",
-            "@ozcan: Ozcan Ilhan: ENG",
-            "@peterson: Peterson Nwoko: ENG",
-            "@phat: Phát -: OPS",
-            "@raldrich: Raldrich Oracion: PRO",
-            "@roshan1: Roshan Ganesh: MKT",
-            "@salman: Salman Haider",
-            "@sam: Sam Monac",
-            "@suleman: Suleman Tariq: ENG",
-            "@tafcirm: Tafcir Majumder: MKT",
-            "@talha: Talha Ahmad: OPS",
-            "@talhacagri: Talha Çağrı Kotcioglu: AI",
-            "@val: Valentine Enedah: PRO",
-            "@vasilis: Vasilis Kotopoulos: AI",
-            "@williams: Williams Cherechi: ENG",
-            "@zaiying: Zaiying Li: OPS"
-        ]
-    for user in raw_list:
-        linear_user = {
-            "username": "",
-            "real_name": "",
-            "team": ""  
-        }
-        linear_user["username"] = user.split(":")[0].strip()
-        linear_user["real_name"] = user.split(":")[1].strip()
-        if len(user.split(":")) > 2:
-            linear_user["team"] = user.split(":")[2].strip()
-        else:
-            linear_user["team"] = None
-        linear_users.append(linear_user)
-    return linear_users
+    # Cache for user information
+    if not hasattr(parse_user_mentions, '_user_cache'):
+        parse_user_mentions._user_cache = {}
+
+    # Find all user mentions (<@U123ABC>)
+    mention_pattern = r'<@([A-Z0-9]+)>'
+    mentions = re.findall(mention_pattern, text)
+    
+    try:
+        for user_id in mentions:
+            display_name = None
+            
+            # Check cache first if enabled
+            if use_cache and user_id in parse_user_mentions._user_cache:
+                display_name = parse_user_mentions._user_cache[user_id]
+            else:
+                try:
+                    # Apply rate limiting for Slack API
+                    if not slack_limiter.check_rate_limit():
+                        logger.warning("Slack API rate limit exceeded, waiting...")
+                        slack_limiter.wait_if_needed()
+                        
+                    user_info = slack_client.users_info(user=user_id)
+                    if user_info["ok"]:
+                        display_name = (
+                            user_info["user"]["profile"].get("display_name") or
+                            user_info["user"]["profile"].get("real_name") or
+                            f"<@{user_id}>"  # Fallback to original mention
+                        )
+                        
+                        # Cache the result if caching is enabled
+                        if use_cache:
+                            parse_user_mentions._user_cache[user_id] = display_name
+                    
+                except SlackApiError as e:
+                    logger.error(f"Error getting user info for {user_id}: {str(e)}")
+                    display_name = f"<@{user_id}>"  # Keep original mention on error
+            
+            if display_name:
+                text = text.replace(f"<@{user_id}>", display_name)
+    
+    except Exception as e:
+        logger.error(f"Error in parse_user_mentions: {str(e)}")
+        # Return original text if parsing fails
+        return text
+    
+    return text
+
+
 
 # Function to load conversation history from database
 def load_conversation_from_db(channel_id, thread_ts):
@@ -453,80 +345,6 @@ def add_message_to_conversation(conversation_key, role, content, message_ts=None
     except Exception as e:
         logger.error(f"Error saving conversation to database: {str(e)}")
 
-def parse_user_mentions(text: str, use_cache: bool = True) -> str:
-    """
-    Convert Slack user mentions (<@U123ABC>) to their actual display names.
-    
-    Args:
-        text: The text containing user mentions
-        use_cache: Whether to use cached user info (default: True)
-    
-    Returns:
-        Text with user mentions replaced by display names
-    """
-    # Cache for user information
-    if not hasattr(parse_user_mentions, '_user_cache'):
-        parse_user_mentions._user_cache = {}
-
-    # Find all user mentions (<@U123ABC>)
-    mention_pattern = r'<@([A-Z0-9]+)>'
-    mentions = re.findall(mention_pattern, text)
-    
-    try:
-        for user_id in mentions:
-            display_name = None
-            
-            # Check cache first if enabled
-            if use_cache and user_id in parse_user_mentions._user_cache:
-                display_name = parse_user_mentions._user_cache[user_id]
-            else:
-                try:
-                    # Apply rate limiting for Slack API
-                    if not slack_limiter.check_rate_limit():
-                        logger.warning("Slack API rate limit exceeded, waiting...")
-                        slack_limiter.wait_if_needed()
-                        
-                    user_info = slack_client.users_info(user=user_id)
-                    if user_info["ok"]:
-                        display_name = (
-                            user_info["user"]["profile"].get("display_name") or
-                            user_info["user"]["profile"].get("real_name") or
-                            f"<@{user_id}>"  # Fallback to original mention
-                        )
-                        
-                        # Cache the result if caching is enabled
-                        if use_cache:
-                            parse_user_mentions._user_cache[user_id] = display_name
-                    
-                except SlackApiError as e:
-                    logger.error(f"Error getting user info for {user_id}: {str(e)}")
-                    display_name = f"<@{user_id}>"  # Keep original mention on error
-            
-            if display_name:
-                text = text.replace(f"<@{user_id}>", display_name)
-    
-    except Exception as e:
-        logger.error(f"Error in parse_user_mentions: {str(e)}")
-        # Return original text if parsing fails
-        return text
-    
-    return text
-
-def safe_append(context_list, content):
-    """
-    Safely append content to the context list, ensuring it's always a string.
-    
-    Args:
-        context_list: The list to append to (usually context_parts)
-        content: The content to append (could be string, list, or other)
-    """
-    if isinstance(content, list):
-        # If it's a list, join it with newlines
-        context_list.append("\n".join(str(item) for item in content))
-    elif content is not None:
-        # For any other type, convert to string
-        context_list.append(str(content))
-    # If None, don't append anything
 
 @app.post("/slack/events")
 async def slack_events(request: Request, background_tasks: BackgroundTasks):
@@ -689,7 +507,6 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
             
     # Return an empty 200 response to acknowledge receipt
     return {}
-    
     
 
 async def process_direct_message(ai_request: AIRequest):
@@ -2563,7 +2380,7 @@ async def perform_linear_rag_search(query: Optional[str] = None, limit: int = 10
         
     try:
         # Import the linear_rag_search module
-        from linear_rag_search import search_issues, get_available_teams_and_cycles, advanced_search
+        from linear_db.linear_rag_search import search_issues, get_available_teams_and_cycles, advanced_search
         
         # Get available teams and cycles
         available_data = get_available_teams_and_cycles()

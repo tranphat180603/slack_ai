@@ -1,19 +1,27 @@
+"""
+Database operations for conversation management.
+"""
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 from contextlib import contextmanager
 import os
-from typing import Generator
+from typing import Generator, Dict, List, Any, Optional
 import logging
 from dotenv import load_dotenv
+from datetime import datetime
+import time
+
+from .models import Base, Conversation, Message
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
 # Get database URL from environment variable
-# Fall back to linear_rag database if DATABASE_URL isn't set
-DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://phattran:phatdeptrai123@localhost:5432/linear_rag')
+# Fall back to database if DATABASE_URL isn't set
+DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://phattran:phatdeptrai123@localhost:5432/tmai_db')
 
 # Create engine with connection pooling
 engine = create_engine(
@@ -27,6 +35,9 @@ engine = create_engine(
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# In-memory conversation cache
+conversation_history = {}
 
 @contextmanager
 def get_db() -> Generator[Session, None, None]:
@@ -47,7 +58,6 @@ def get_db() -> Generator[Session, None, None]:
 
 def init_db() -> None:
     """Initialize database tables"""
-    from models import Base
     Base.metadata.create_all(bind=engine)
 
 def check_db_connection() -> bool:
@@ -58,6 +68,125 @@ def check_db_connection() -> bool:
         return True
     except Exception as e:
         logger.error(f"Database connection check failed: {str(e)}")
+        return False
+
+def load_conversation_from_db(channel_id: str, thread_ts: str) -> Optional[List[Dict[str, Any]]]:
+    """
+    Load conversation history from database.
+    
+    Args:
+        channel_id: The Slack channel ID
+        thread_ts: The thread timestamp
+        
+    Returns:
+        List of message dictionaries or None if not found
+    """
+    conversation_key = f"{channel_id}:{thread_ts}"
+    
+    # First check memory cache
+    if conversation_key in conversation_history:
+        return conversation_history[conversation_key]
+    
+    try:
+        with get_db() as db:
+            # Find the conversation
+            conversation = db.query(Conversation).filter(
+                Conversation.channel_id == channel_id,
+                Conversation.thread_ts == thread_ts
+            ).first()
+            
+            if not conversation:
+                return None
+            
+            # Get all messages for this conversation
+            messages = db.query(Message).filter(
+                Message.conversation_id == conversation.id
+            ).order_by(Message.timestamp).all()
+            
+            # Format messages
+            formatted_messages = []
+            for msg in messages:
+                message_dict = {
+                    "role": msg.role,
+                    "content": msg.content,
+                    "timestamp": float(msg.timestamp),  # Ensure timestamp is float
+                    "message_ts": msg.message_ts,
+                    "metadata": msg.meta_data or {}
+                }
+                formatted_messages.append(message_dict)
+            
+            # Cache in memory
+            conversation_history[conversation_key] = formatted_messages
+            
+            return formatted_messages
+            
+    except Exception as e:
+        logger.error(f"Error loading conversation from database: {str(e)}")
+        return None
+
+def save_conversation_to_db(channel_id: str, thread_ts: str, messages: List[Dict[str, Any]]) -> bool:
+    """
+    Save conversation history to database.
+    
+    Args:
+        channel_id: The Slack channel ID
+        thread_ts: The thread timestamp
+        messages: List of message dictionaries to save
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    conversation_key = f"{channel_id}:{thread_ts}"
+    
+    try:
+        with get_db() as db:
+            # Find or create conversation
+            conversation = db.query(Conversation).filter(
+                Conversation.channel_id == channel_id,
+                Conversation.thread_ts == thread_ts
+            ).first()
+            
+            if not conversation:
+                conversation = Conversation(
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow()
+                )
+                db.add(conversation)
+                db.flush()  # Get the ID without committing
+            else:
+                conversation.updated_at = datetime.utcnow()
+            
+            # Delete existing messages
+            db.query(Message).filter(
+                Message.conversation_id == conversation.id
+            ).delete()
+            
+            # Add new messages
+            for msg in messages:
+                # Ensure timestamp is a float
+                timestamp = msg["timestamp"] if isinstance(msg["timestamp"], (int, float)) else time.time()
+                
+                message = Message(
+                    conversation_id=conversation.id,
+                    role=msg["role"],
+                    content=msg["content"],
+                    timestamp=timestamp,  # Use the float timestamp
+                    message_ts=msg.get("message_ts"),
+                    meta_data=msg.get("metadata", {})
+                )
+                db.add(message)
+            
+            db.commit()
+            
+            # Update memory cache
+            conversation_history[conversation_key] = messages
+            
+            return True
+            
+    except Exception as e:
+        logger.error(f"Error saving conversation to database: {str(e)}")
         return False
 
 def cleanup_old_conversations(hours: int = 24) -> int:
@@ -71,7 +200,8 @@ def cleanup_old_conversations(hours: int = 24) -> int:
         Number of conversations removed
     """
     from sqlalchemy import delete
-    from models import Conversation
+    from sqlalchemy.orm import Session
+    from conversation_db.models import Conversation
     from datetime import datetime, timedelta
     
     cutoff_time = datetime.utcnow() - timedelta(hours=hours)
@@ -115,7 +245,6 @@ def view_conversations(limit: int = 2, channel_id: str = None, thread_ts: str = 
         channel_id: Optional filter for a specific channel
         thread_ts: Optional filter for a specific thread timestamp
     """
-    from models import Conversation, Message
     from sqlalchemy import and_, desc
     
     try:
