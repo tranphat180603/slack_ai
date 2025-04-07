@@ -1,8 +1,7 @@
 """
-LLM integration module for TMAI Agent.
-Provides modular components for interacting with LLM services.
+LLM utilities
 """
 
-from .openai_client import OpenAIClient
+from .openai_client import OpenaiClient
 
-__all__ = ['OpenAIClient'] 
+__all__ = ['OpenaiClient'] 

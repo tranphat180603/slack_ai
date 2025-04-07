@@ -21,7 +21,7 @@ from datetime import datetime
 # Fix imports when running as a script
 if __name__ == "__main__":
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-    from linear_db.db_pool import get_db_connection
+    from ops_linear_db.db_pool import get_db_connection
 else:
     from .db_pool import get_db_connection
 
@@ -604,8 +604,8 @@ def main():
         # Example of how to use these functions with the Linear API
         print("\nExample code to integrate with Linear API:")
         print("```python")
-        print("from linear_db.linear_client import LinearClient")
-        print("from linear_db.linear_rag_embeddings import store_issue_embedding")
+        print("from ops_linear_db.linear_client import LinearClient")
+        print("from ops_linear_db.linear_rag_embeddings import store_issue_embedding")
         print("")
         print("# Initialize Linear client")
         print("linear = LinearClient(os.getenv('LINEAR_API_KEY'))")

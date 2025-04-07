@@ -1,15 +1,48 @@
 """
-Tool Schemas for TMAI Agent.
-This package contains JSONSchema definitions for tools that can be used with LLM function calling.
+Tools package for TMAI Agent.
+This package contains schemas and implementations for interacting with external services.
 """
 
-from .tool_schema_semantic_search import SEMANTIC_SEARCH_SCHEMAS
+# Import schemas
 from .tool_schema_linear import LINEAR_SCHEMAS
 from .tool_schema_slack import SLACK_SCHEMAS
+from .tool_schema_semantic_search import SEMANTIC_SEARCH_SCHEMAS
 
-# Combine all schemas
-ALL_SCHEMAS = {
-    **SEMANTIC_SEARCH_SCHEMAS,
-    **LINEAR_SCHEMAS,
-    **SLACK_SCHEMAS
-} 
+# Import tools implementation
+from .tools_declaration import (
+    # Classes
+    LinearTools,
+    SlackTools,
+    
+    # Exceptions
+    LinearError,
+    LinearAuthError,
+    LinearNotFoundError,
+    LinearValidationError,
+    
+    # Singleton instances
+    linear_tools,
+    slack_tools
+)
+
+# Export all schemas and tools
+__all__ = [
+    # Schema collections
+    'LINEAR_SCHEMAS',
+    'SLACK_SCHEMAS',
+    'SEMANTIC_SEARCH_SCHEMAS',
+    
+    # Tool classes
+    'LinearTools',
+    'SlackTools',
+    
+    # Exceptions
+    'LinearError',
+    'LinearAuthError',
+    'LinearNotFoundError',
+    'LinearValidationError',
+    
+    # Singleton instances
+    'linear_tools',
+    'slack_tools'
+] 

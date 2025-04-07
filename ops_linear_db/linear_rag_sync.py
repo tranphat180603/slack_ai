@@ -1,50 +1,40 @@
 """
-Daily sync script for Linear RAG system.
-Fetches and updates embeddings for the last 4 cycles from each team.
-Can be scheduled to run daily using cron or similar.
+Script to synchronize Linear data with the semantic search database.
+This script fetches Linear issues, projects, and comments and generates embeddings for them.
 """
+
 import os
-import sys
 import logging
 import argparse
+import time
 import json
-from datetime import datetime
-from typing import List, Dict, Any, Set
+from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
+import traceback
+from datetime import datetime, timedelta
 
-# Fix imports when running as a script
-if __name__ == "__main__":
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-    from linear_db.linear_client import LinearClient, LinearError
-    from linear_db.linear_rag_embeddings import (
-        store_issue_embedding,
-        store_project_embedding, 
-        store_comment_embedding,
-        clear_embeddings,
-        get_db_connection
-    )
-else:
-    from linear_db.linear_client import LinearClient, LinearError
-    from .linear_rag_embeddings import (
-        store_issue_embedding,
-        store_project_embedding, 
-        store_comment_embedding,
-        clear_embeddings,
-        get_db_connection
-    )
-
-load_dotenv()
-
-# Set up logging
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("linear_rag_sync.log"),
-        logging.StreamHandler()
-    ]
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("linear_rag_sync")
+
+# Add parent directory to path
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Import required modules
+from ops_linear_db.linear_client import LinearClient, LinearError
+from ops_linear_db.linear_rag_embeddings import (
+    store_issue_embedding,
+    store_project_embedding,
+    store_comment_embedding,
+    clear_embeddings
+)
+from ops_linear_db.db_pool import get_db_connection
+
+load_dotenv()
 
 # Disable GQL transport request logs
 logging.getLogger('gql.transport.requests').setLevel(logging.WARNING)

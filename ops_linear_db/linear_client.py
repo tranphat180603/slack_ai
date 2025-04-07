@@ -87,6 +87,58 @@ class LinearClient:
                 raise LinearError(f"Linear API error: {error_message}")
         except Exception as e:
             raise LinearError(f"Unexpected error: {str(e)}")
+        
+    def getCurrentUser(self, slack_display_name: str) -> dict:
+        """
+        Get information about a specific user by their Slack display name.
+        
+        Args:
+            slack_display_name: The Slack display name of the user to look up (e.g. '@username')
+            
+        Returns:
+            Dictionary containing user information or None if not found
+        """
+        users_info = {
+            '@Talha': {'real_name': 'Talha Ahmad', 'title': 'Operations Manager', 'team': 'MKT'},
+            '@Val': {'real_name': 'Valentine Enedah', 'title': 'CX', 'team': 'PRO'},
+            '@Ian Balina': {'real_name': 'Ian Balina', 'title': 'Founder and CEO', 'team': None},
+            '@Harsh': {'real_name': 'Harsh', 'title': 'Senior Full Stack Engineer', 'team': 'ENG'},
+            '@Andrew Tran': {'real_name': 'Andrew Tran', 'title': 'Data Engineer', 'team': 'AI'},
+            '@Ayush Jalan': {'real_name': 'Ayush Jalan', 'title': 'Blockchain Engineer', 'team': 'ENG'},
+            '@Drich': {'real_name': 'Raldrich Oracion', 'title': 'Customer Success', 'team': 'PRO'},
+            '@Bartosz': {'real_name': 'Bartosz Kusnierczak', 'title': 'Senior Full Stack Engineer', 'team': 'ENG'},
+            '@Jake': {'real_name': 'Jake Nguyen', 'title': 'Senior Data Engineer', 'team': 'AI'},
+            '@Roshan Ganesh': {'real_name': 'Roshan Ganesh', 'title': 'Marketing Lead', 'team': 'MKT'},
+            '@Sam Monac': {'real_name': 'Sam Monac', 'title': 'Chief Product Officer', 'team': None},
+            '@Favour': {'real_name': 'Favour Ikwan', 'title': 'Chief Operations Officer', 'team': 'OPS'},
+            '@Suleman Tariq': {'real_name': 'Suleman Tariq', 'title': 'Tech Lead', 'team': 'ENG'},
+            '@Zaiying Li': {'real_name': 'Zaiying Li', 'title': '', 'team': 'OPS'},
+            '@Hemank': {'real_name': 'Hemank', 'title': '', 'team': 'RES'},
+            '@Ben': {'real_name': 'Ben Diagi', 'title': 'Product Manager', 'team': 'PRO'},
+            '@Chao': {'real_name': 'Chao Li', 'title': 'Quantitative Analyst', 'team': 'AI'},
+            '@Abdullah': {'real_name': 'Abdullah', 'title': 'Head Of Investment', 'team': 'RES'},
+            '@Manav': {'real_name': 'Manav Garg', 'title': 'Blockchain Engineer', 'team': 'RES'},
+            '@Vasilis': {'real_name': 'Vasilis Kotopoulos', 'title': 'AI Team Lead', 'team': 'AI'},
+            '@Olaitan Akintunde': {'real_name': 'Olaitan Akintunde', 'title': 'Video Editor and Motion Designer', 'team': 'MKT'},
+            '@Chetan Kale': {'real_name': 'Chetan Kale', 'title': '', 'team': 'RES'},
+            '@ayo': {'real_name': 'ayo', 'title': '', 'team': 'PRO'},
+            '@Özcan İlhan': {'real_name': 'Özcan İlhan', 'title': '', 'team': 'ENG'},
+            '@Faith Oladejo': {'real_name': 'Faith Oladejo', 'title': '', 'team': 'PRO'},
+            '@Taf': {'real_name': 'Tafcir Majumder', 'title': 'Head Of Business Development', 'team': 'MKT'},
+            '@Caleb N': {'real_name': 'Caleb', 'title': '', 'team': 'MKT'},
+            '@divine': {'real_name': 'Divine Anthony', 'title': 'Devops', 'team': 'ENG'},
+            '@Williams': {'real_name': 'Williams Williams', 'title': 'Senior Fullstack Engineer', 'team': 'ENG'},
+            '@Anki Truong': {'real_name': 'Truong An (Anki)', 'title': '', 'team': 'ENG'},
+            '@Ryan': {'real_name': 'Ryan Barcelona', 'title': 'Freelancer', 'team': 'MKT'},
+            '@Phat': {'real_name': 'Ngoc Phat', 'title': '', 'team': 'OPS'},
+            '@AhmedHamdy': {'real_name': 'AhmedHamdy', 'title': 'Senior Data Scientist/ML Engineer', 'team': 'AI'},
+            '@Grady': {'real_name': 'Grady', 'title': 'Data Scientist/AI Engineer', 'team': 'AI'},
+            '@Khadijah': {'real_name': 'Khadijah Shogbuyi', 'title': '', 'team': 'OPS'},
+            '@Talha Cagri': {'real_name': 'Talha Cagri Kotcioglu', 'title': 'Quantitative Analyst', 'team': 'AI'},
+            '@Agustín Gamoneda': {'real_name': 'Agustín Gamoneda', 'title': '', 'team': 'MKT'},
+            '@Peterson': {'real_name': 'Peterson Nwoko', 'title': 'Sr DevOps/SRE Engineer', 'team': 'ENG'}
+        }
+        return users_info.get(slack_display_name, None)
 
     def getAllUsers(self, teamKey: str) -> List[dict]:
         """

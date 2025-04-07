@@ -101,16 +101,16 @@ class SlackClient:
         
         return delay
     
-    def get_employees_data(self, real_name: str) -> List[Dict[str, Any]]:
+    def get_employees_data(self, display_name: str) -> List[Dict[str, Any]]:
         users_list = [
-        {'display_name': '@Talha', 'real_name': 'Talha Ahmad', 'title': 'Operations Manager', 'team': 'OPS'},
+        {'display_name': '@Talha', 'real_name': 'Talha Ahmad', 'title': 'Operations Manager', 'team': 'MKT'},
         {'display_name': '@Val', 'real_name': 'Valentine Enedah', 'title': 'CX', 'team': 'PRO'},
         {'display_name': '@Ian Balina', 'real_name': 'Ian Balina', 'title': 'Founder and CEO', 'team': None},
         {'display_name': '@Harsh', 'real_name': 'Harsh', 'title': 'Senior Full Stack Engineer', 'team': 'ENG'},
         {'display_name': '@Andrew Tran', 'real_name': 'Andrew Tran', 'title': 'Data Engineer', 'team': 'AI'},
         {'display_name': '@Ayush Jalan', 'real_name': 'Ayush Jalan', 'title': 'Blockchain Engineer', 'team': 'ENG'},
         {'display_name': '@Drich', 'real_name': 'Raldrich Oracion', 'title': 'Customer Success', 'team': 'PRO'},
-        {'display_name': '@Bartosz', 'real_name': 'Bartosz Kusnierczak', 'title': 'Passion never fail', 'team': 'ENG'},
+        {'display_name': '@Bartosz', 'real_name': 'Bartosz Kusnierczak', 'title': 'Senior Full Stack Engineer', 'team': 'ENG'},
         {'display_name': '@Jake', 'real_name': 'Jake Nguyen', 'title': 'Senior Data Engineer', 'team': 'AI'},
         {'display_name': '@Roshan Ganesh', 'real_name': 'Roshan Ganesh', 'title': 'Marketing Lead', 'team': 'MKT'},
         {'display_name': '@Sam Monac', 'real_name': 'Sam Monac', 'title': 'Chief Product Officer', 'team': None},
@@ -134,7 +134,7 @@ class SlackClient:
         {'display_name': '@Williams', 'real_name': 'Williams Williams', 'title': 'Senior Fullstack Engineer', 'team': 'ENG'},
         {'display_name': '@Anki Truong', 'real_name': 'Truong An (Anki)', 'title': '', 'team': 'ENG'},
         {'display_name': '@Ryan', 'real_name': 'Ryan Barcelona', 'title': 'Freelancer', 'team': 'MKT'},
-        {'display_name': '@Phát -', 'real_name': 'Phát -', 'title': '', 'team': 'OPS'},
+        {'display_name': '@Phat', 'real_name': 'Ngoc Phat', 'title': '', 'team': 'OPS'},
         {'display_name': '@AhmedHamdy', 'real_name': 'AhmedHamdy', 'title': 'Senior Data Scientist/ML Engineer', 'team': 'AI'},
         {'display_name': '@Grady', 'real_name': 'Grady', 'title': 'Data Scientist/AI Engineer', 'team': 'AI'},
         {'display_name': '@Khadijah', 'real_name': 'Khadijah Shogbuyi', 'title': '', 'team': 'OPS'},
@@ -142,8 +142,8 @@ class SlackClient:
         {'display_name': '@Agustín Gamoneda', 'real_name': 'Agustín Gamoneda', 'title': '', 'team': 'MKT'},
         {'display_name': '@Peterson', 'real_name': 'Peterson Nwoko', 'title': 'Sr DevOps/SRE Engineer', 'team': 'ENG'}
         ]
-        if real_name:
-            return [user for user in users_list if re.match(f"^{re.escape(real_name)}$", user['real_name'], re.IGNORECASE)]
+        if display_name:
+            return [user for user in users_list if re.match(f"^{re.escape(display_name)}$", user['display_name'], re.IGNORECASE)]
         else:
             return users_list
 

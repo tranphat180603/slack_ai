@@ -22,7 +22,7 @@ from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 from slack_sdk.errors import SlackApiError
 
-from conversation_db import init_db, check_db_connection, cleanup_old_conversations
+from ops_conversation_db import init_db, check_db_connection, cleanup_old_conversations
 from rate_limiter import global_limiter
 from TMAI_slack_agent import TMAISlackAgent, AIRequest
 
@@ -45,8 +45,15 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger("slack_ai_app")
-logging.getLogger("openai_client").setLevel(logging.DEBUG)
+
+# Set all module loggers to DEBUG level for comprehensive logging
+logging.getLogger("openai_client").setLevel(logging.INFO)
 logging.getLogger("tmai_agent").setLevel(logging.DEBUG)
+logging.getLogger("agent").setLevel(logging.DEBUG)
+logging.getLogger("context_manager").setLevel(logging.INFO)
+logging.getLogger("slack_tools").setLevel(logging.DEBUG)
+logging.getLogger("linear_client").setLevel(logging.DEBUG)
+
 # Load environment variables
 load_dotenv()
 logger.info("Environment variables loaded")
@@ -67,11 +74,50 @@ if not OPENAI_API_KEY:
 
 # Load prompts from YAML
 try:
-    with open('prompts.yaml', 'r', encoding='utf-8') as file:
-        PROMPTS = yaml.safe_load(file)
-    logger.info("Successfully loaded prompts from prompts.yaml")
+    PROMPTS = {}
+    prompt_files = [
+        'command_prompts.yaml', 
+        'linear_prompts.yaml', 
+        'slack_prompt.yaml', 
+        'github_prompt.yaml', 
+        'website_prompt.yaml'
+    ]
+    
+    logger.info(f"Loading prompts from {len(prompt_files)} files")
+    
+    for file_name in prompt_files:
+        file_path = os.path.join('prompts', file_name)
+        try:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                file_content = yaml.safe_load(file)
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"Loaded {file_path} with categories: {list(file_content.keys())}")
+                
+                # Merge the content into the main PROMPTS dictionary
+                for key, value in file_content.items():
+                    if key in PROMPTS:
+                        # If key already exists, merge the sub-dictionaries
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(f"Merging category '{key}' from {file_path}")
+                        PROMPTS[key].update(value)
+                    else:
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(f"Adding new category '{key}' from {file_path}")
+                        PROMPTS[key] = value
+            logger.info(f"Successfully loaded prompts from {file_path}")
+        except Exception as e:
+            logger.warning(f"Error loading prompt file {file_path}: {str(e)}")
+            
+    if PROMPTS:
+        logger.info(f"Loaded {len(PROMPTS)} prompt categories")
+        if logger.isEnabledFor(logging.DEBUG):
+            for category, content in PROMPTS.items():
+                if isinstance(content, dict):
+                    logger.debug(f"Category '{category}' contains: {list(content.keys())}")
+    else:
+        logger.warning("No prompts were successfully loaded")
 except Exception as e:
-    logger.error(f"Error loading prompts: {str(e)}")
+    logger.error(f"Error in prompt loading process: {str(e)}")
     PROMPTS = {}
 
 # Initialize the TMaiSlackAgent
@@ -129,7 +175,7 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
                 try:
                     user_info = agent.slack_client.users_info(user=user_id)
                     if user_info.get("ok") and user_info.get("user"):
-                        sender_name = user_info["user"].get("real_name") or user_info["user"].get("name") or "User"
+                        sender_name = "@" + user_info["user"].get("profile").get("display_name") or user_info["user"].get("name") or "User"
                 except SlackApiError as e:
                     logger.warning(f"Could not get user name, using default: {e.response['error']}")
                 
@@ -157,7 +203,7 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
                                 "type": "section",
                                 "text": {
                                     "type": "mrkdwn",
-                                    "text": f"\n*Status:*\n```\n➤ Analyzing your query...\n```"
+                                    "text": f"\n```\n➤ Analyzing your query...\n```"
                                 },
                                 "accessory": {
                                     "type": "image",
@@ -208,7 +254,7 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
                 try:
                     user_info = agent.slack_client.users_info(user=user_id)
                     if user_info.get("ok") and user_info.get("user"):
-                        sender_name = user_info["user"].get("real_name") or user_info["user"].get("name") or "User"
+                        sender_name = "@" + user_info["user"].get("profile").get("display_name") or user_info["user"].get("name") or "User"
                 except SlackApiError as e:
                     logger.warning(f"Could not get user name, using default: {e.response['error']}")
                 
@@ -233,7 +279,7 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
                                 "type": "section",
                                 "text": {
                                     "type": "mrkdwn",
-                                    "text": f"\n*Status:*\n```\n➤ Analyzing your query...\n```"
+                                    "text": f"\n```\n➤ Analyzing your query...\n```"
                                 },
                                 "accessory": {
                                     "type": "image",
@@ -277,6 +323,39 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
 async def ai_command(request: Request):
     """Handle Slack slash commands."""
     return {"message": "AI command received"}
+
+@app.post("/slack/interactivity")
+async def slack_interactivity(request: Request, background_tasks: BackgroundTasks):
+    """Handle Slack interactive components (buttons, menus, etc.)"""
+    logger.info("Slack interactivity endpoint called")
+    
+    try:
+        # Slack sends form-encoded payload
+        form_data = await request.form()
+        payload_str = form_data.get("payload")
+        
+        if not payload_str:
+            logger.warning("No payload found in interactive request")
+            return {}
+        
+        # Parse the payload JSON
+        payload = json.loads(payload_str)
+        logger.debug(f"Received interaction payload type: {payload.get('type')}")
+        
+        # Handle stop button clicks
+        if payload.get("type") == "block_actions":
+            # Process in background to avoid timeouts
+            background_tasks.add_task(
+                agent.handle_interaction_payload,
+                payload
+            )
+        
+        # Return a 200 OK immediately to acknowledge receipt
+        return {}
+    
+    except Exception as e:
+        logger.error(f"Error processing interaction: {str(e)}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.on_event("startup")
 async def startup_event():

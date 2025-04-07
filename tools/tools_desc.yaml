@@ -1,0 +1,233 @@
+linear_tools:
+  - category: "ACTION: tools that enable TMAI Agent to act on behalf of employees on Linear. These must be used with caution after having gathered all the necessary information from the user."
+    tools:
+      - name: createIssue
+        description: GraphQL-based function to create a new issue in Linear with specified details
+        inputs:
+          team_key: "The team key where the issue will be created (enum: ENG, OPS, RES, AI, MKT, PRO)"
+          title: "Title of the issue"
+          description: "Markdown description of the issue"
+          priority: "Priority level (0.0: None, 1.0: Urgent, 2.0: High, 3.0: Medium, 4.0: Low)"
+          estimate: "Estimate points for the issue"
+          assignee_name: "Display name of the user to assign the issue to"
+          state_name: "Name of the workflow state (e.g. 'Todo', 'In Progress', 'Done')"
+          label_names: "List of label names to apply to the issue"
+          project_name: "Name of the project to add the issue to"
+          cycle_name: "Name of the cycle to add the issue to"
+          parent_issue_number: "Issue number of the parent issue"
+        outputs: Created issue details
+        required_inputs:
+          - team_key
+          - title
+
+      - name: updateIssue
+        description: GraphQL-based function to update an existing issue in Linear
+        inputs:
+          issue_number: "The number of the issue to update"
+          title: "New title for the issue"
+          description: "New markdown description"
+          priority: "New priority level (0.0: None, 1.0: Urgent, 2.0: High, 3.0: Medium, 4.0: Low)"
+          estimate: "New estimate points"
+          assignee_name: "Display name of the user to reassign to"
+          state_name: "New workflow state name"
+          label_names: "New list of label names"
+          project_name: "Name of the project to move the issue to"
+          cycle_name: "Name of the cycle to move the issue to"
+          parent_issue_number: "Issue number of the new parent issue"
+          archived: "Whether to archive the issue"
+        outputs: Updated issue details
+        required_inputs:
+          - issue_number
+
+  - category: "EXPLORE: Low-effort functions that are used to explore how data on Linear looks like. You can just randomly fill in the inputs in the enum fields to see what data you can get."
+    tools:
+      - name: getAllUsers
+        description: GraphQL-based function to get all users in a specified Linear team
+        inputs:
+          team_key: "The team key to get users from (enum: ENG, OPS, RES, AI, MKT, PRO)"
+        outputs: "Array of user objects with metadata"
+        required_inputs:
+          - team_key
+
+      - name: getCurrentUser
+        description: Get information about a specific user on Linear (their team key, their username) by their Slack display name
+        inputs:
+          slack_display_name: "The Slack display name of the user to look up (e.g. '@username')"
+        outputs: "User object with real name and team information"
+        required_inputs:
+          - slack_display_name
+
+      - name: getAllProjects
+        description: GraphQL-based function to get all projects in a specified Linear team
+        inputs:
+          team_key: "The team key to get projects from (enum: ENG, OPS, RES, AI, MKT, PRO)"
+        outputs: "Array of project objects with metadata"
+        required_inputs:
+          - team_key
+
+      - name: getAllCycles
+        description: GraphQL-based function to get all cycles in a specified Linear team
+        inputs:
+          team_key: "The team key to get cycles from (enum: ENG, OPS, RES, AI, MKT, PRO)"
+        outputs: "Array of cycle objects with metadata"
+        required_inputs:
+          - team_key
+
+      - name: getAllLabels
+        description: GraphQL-based function to get all labels in a specified Linear team
+        inputs:
+          team_key: "The team key to get labels from (enum: ENG, OPS, RES, AI, MKT, PRO)"
+        outputs: "Array of label objects with metadata"
+        required_inputs:
+          - team_key
+
+      - name: getAllStates
+        description: GraphQL-based function to get all workflow states in a specified Linear team
+        inputs:
+          team_key: "The team key to get workflow states from (enum: ENG, OPS, RES, AI, MKT, PRO)"
+        outputs: "Array of workflow state objects with metadata"
+        required_inputs:
+          - team_key
+
+  - category: "FILTER: High-effort functions used to filter and select better results but comes at a cost of more required inputs. Always try to gather as much data as you can before using these functions."
+    tools:
+      - name: filterIssues
+        description: GraphQL-based function to filter Linear issues based on various criteria such as state, priority, assignee, etc.
+        inputs:
+          team_key: "The team key to filter issues by (enum: ENG, OPS, RES, AI, MKT, PRO)"
+          state: "Filter by issue state (e.g. 'In Progress', 'Todo', 'Done')"
+          priority: "Filter by priority level (0.0: None, 1.0: Urgent, 2.0: High, 3.0: Medium, 4.0: Low)"
+          assignee_name: "Filter by assignee's display name (exact match)"
+          assignee_contains: "Filter by assignee names containing this text (case-insensitive)"
+          title_contains: "Filter issues where title contains this string"
+          description_contains: "Filter issues where description contains this string"
+          cycle_name: "Filter by cycle name"
+          project_name: "Filter by project name"
+          label_name: "Filter by label name"
+          first: "Limit the number of issues returned"
+        outputs: "Array of matching issues with metadata"
+        required_inputs:
+          - team_key
+
+      - name: filterComments
+        description: GraphQL-based function to filter comments in Linear based on various criteria
+        inputs:
+          issue_number: "Filter comments by issue number"
+          user_display_name: "Filter comments by user display name"
+          contains: "Filter comments containing this text (case-sensitive)"
+          contains_ignore_case: "Filter comments containing this text (case-insensitive)"
+        outputs: "Array of matching comments"
+        required_inputs:
+          - issue_number
+
+      - name: filterAttachments
+        description: GraphQL-based function to filter attachments in Linear based on various criteria
+        inputs:
+          issue_number: "Filter attachments by issue number"
+          title_contains: "Filter attachments where title contains this string"
+          creator_display_name: "Filter attachments by creator display name"
+        outputs: "Array of matching attachments"
+        required_inputs:
+          - issue_number
+
+      - name: filterProjects
+        description: GraphQL-based function to filter projects in Linear based on various criteria
+        inputs:
+          team_key: "Filter projects by team key (enum: ENG, OPS, RES, AI, MKT, PRO)"
+          name: "Exact match for project name"
+          name_contains: "Filter projects where name contains this string (case-sensitive)"
+          name_contains_ignore_case: "Filter projects where name contains this string (case-insensitive)"
+          state: "Filter by project state (e.g. 'planned', 'started', 'completed')"
+          lead_display_name: "Filter by project lead's display name"
+        outputs: "Array of matching project objects"
+        required_inputs: []
+
+      - name: filterCycles
+        description: GraphQL-based function to filter cycles in Linear based on various criteria
+        inputs:
+          team_key: "Filter cycles by team key (enum: ENG, OPS, RES, AI, MKT, PRO)"
+          name: "Exact match for cycle name"
+          name_contains: "Filter cycles where name contains this string"
+          is_active: "Filter for active/inactive cycles"
+        outputs: "Array of matching cycle objects"
+        required_inputs: []
+
+      - name: createComment
+        description: GraphQL-based function to create a new comment on a Linear issue
+        inputs:
+          issue_number: "The issue number to comment on"
+          body: "The comment text (supports markdown)"
+        outputs: "Created comment object"
+        required_inputs:
+          - issue_number
+          - body
+
+      - name: semantic_search_linear
+        description: Find Linear content (by loosely matching the content of issues, projects, comments) semantically similar to a natural language query. Returns results with metadata that can be used for further filtering with other Linear functions. Used when the query mentions about a name or description of issues, projects, comments, etc
+        inputs:
+          query: "Natural language query to search for"
+          limit: "Maximum number of results to return"
+          use_reranker: "Whether to apply LLM-based reranking to improve search results"
+          candidate_pool_size: "Size of the initial candidate pool for reranking"
+          team_key: "Filter results by team key (enum: ENG, OPS, RES, AI, MKT, PRO)"
+          object_type: "Filter results by object type (enum: Issue, Project, Comment)"
+        outputs: "Array of semantically relevant Linear objects with metadata"
+        required_inputs:
+          - query
+
+slack_tools:
+  - category: "Slack communication tools"
+    tools:
+      - name: search_channel_history
+        description: Search Slack channel history with specific filters to find relevant messages
+        inputs:
+          channel_id: "The ID of the Slack channel to search (e.g., 'C01234ABCDE')"
+          username: "Filter messages by a specific username"
+          time_range: "Time unit to look back (enum: hours, days, weeks)"
+          time_value: "Number of time units to look back"
+          message_count: "Maximum number of messages to retrieve"
+        outputs: "Array of matching messages with metadata including content type detection"
+        required_inputs:
+          - channel_id
+
+      - name: get_users
+        description: Get user information for every employee in the company or a specific employee
+        inputs:
+          display_name: "The display name of the employee to search for (e.g. '@username')"
+        outputs: "Array of Slack user objects with metadata"
+        required_inputs: []
+
+      - name: get_current_user
+        description: Get the current user's information on Slack
+        inputs:
+          user_id: "The ID of the user to get information for"
+        outputs: "User object with metadata"
+        required_inputs: []
+
+github_tools:
+  - category: "GitHub repository management tools"
+    tools:
+      - name: list_repositories
+        description: Lists repositories the authenticated user has access to
+        inputs:
+          visibility: "Filter by visibility (enum: all, public, private)"
+          sort: "Sort by property (enum: created, updated, pushed, full_name)"
+          direction: "Sort direction (enum: asc, desc)"
+          per_page: "Number of results per page"
+        outputs: "Array of repository objects"
+        required_inputs: []
+
+      - name: get_repository_issues
+        description: Lists issues for a specific repository
+        inputs:
+          owner: "Repository owner"
+          repo: "Repository name"
+          state: "Filter by issue state (enum: open, closed, all)"
+          labels: "Comma-separated list of label names"
+          sort: "Sort by property (enum: created, updated, comments)"
+          direction: "Sort direction (enum: asc, desc)"
+          since: "ISO 8601 timestamp to filter by updated date"
+        outputs: "Array of issue objects"
+        required_inputs:
+          - owner
+          - repo 

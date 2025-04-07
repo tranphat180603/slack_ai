@@ -11,9 +11,9 @@ from dotenv import load_dotenv
 # Fix imports when running as a script
 if __name__ == "__main__":
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-    from linear_db.db_pool import get_db_connection
+    from ops_linear_db.db_pool import get_db_connection
 else:
-    from .db_pool import get_db_connection
+    from ops_linear_db.db_pool import get_db_connection
 
 load_dotenv()
 

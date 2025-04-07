@@ -6,7 +6,7 @@ These schemas can be used with OpenAI function calling to interact with Linear.
 # Schema for filtering issues
 FILTER_ISSUES_SCHEMA = {
     "type": "function",
-    "name": "filter_linear_issues",
+    "name": "filterIssues",
     "description": "GraphQL-based function to filter Linear issues based on various criteria such as state, priority, assignee, etc.",
     "parameters": {
         "type": "object",
@@ -66,7 +66,7 @@ FILTER_ISSUES_SCHEMA = {
 # Schema for creating issues
 CREATE_ISSUE_SCHEMA = {
     "type": "function",
-    "name": "create_linear_issue",
+    "name": "createIssue",
     "description": "GraphQL-based function to create a new issue in Linear with specified details",
     "parameters": {
         "type": "object",
@@ -129,7 +129,7 @@ CREATE_ISSUE_SCHEMA = {
 # Schema for updating issues
 UPDATE_ISSUE_SCHEMA = {
     "type": "function",
-    "name": "update_linear_issue",
+    "name": "updateIssue",
     "description": "GraphQL-based function to update an existing issue in Linear",
     "parameters": {
         "type": "object",
@@ -195,7 +195,7 @@ UPDATE_ISSUE_SCHEMA = {
 # Schema for filtering comments
 FILTER_COMMENTS_SCHEMA = {
     "type": "function",
-    "name": "filter_linear_comments",
+    "name": "filterComments",
     "description": "GraphQL-based function to filter comments in Linear based on various criteria",
     "parameters": {
         "type": "object",
@@ -225,7 +225,7 @@ FILTER_COMMENTS_SCHEMA = {
 # Schema for filtering attachments
 FILTER_ATTACHMENTS_SCHEMA = {
     "type": "function",
-    "name": "filter_linear_attachments",
+    "name": "filterAttachments",
     "description": "GraphQL-based function to filter attachments in Linear based on various criteria",
     "parameters": {
         "type": "object",
@@ -251,7 +251,7 @@ FILTER_ATTACHMENTS_SCHEMA = {
 # Schema for getting all users in a team
 GET_USERS_SCHEMA = {
     "type": "function",
-    "name": "get_linear_team_users",
+    "name": "getAllUsers",
     "description": "GraphQL-based function to get all users in a specified Linear team",
     "parameters": {
         "type": "object",
@@ -270,7 +270,7 @@ GET_USERS_SCHEMA = {
 # Schema for getting all projects in a team
 GET_PROJECTS_SCHEMA = {
     "type": "function",
-    "name": "get_linear_team_projects",
+    "name": "getAllProjects",
     "description": "GraphQL-based function to get all projects in a specified Linear team",
     "parameters": {
         "type": "object",
@@ -289,7 +289,7 @@ GET_PROJECTS_SCHEMA = {
 # Schema for getting all cycles in a team
 GET_CYCLES_SCHEMA = {
     "type": "function",
-    "name": "get_linear_team_cycles",
+    "name": "getAllCycles",
     "description": "GraphQL-based function to get all cycles in a specified Linear team",
     "parameters": {
         "type": "object",
@@ -308,7 +308,7 @@ GET_CYCLES_SCHEMA = {
 # Schema for getting all labels in a team
 GET_LABELS_SCHEMA = {
     "type": "function",
-    "name": "get_linear_team_labels",
+    "name": "getAllLabels",
     "description": "GraphQL-based function to get all labels in a specified Linear team",
     "parameters": {
         "type": "object",
@@ -327,7 +327,7 @@ GET_LABELS_SCHEMA = {
 # Schema for getting all states in a team
 GET_STATES_SCHEMA = {
     "type": "function",
-    "name": "get_linear_team_states",
+    "name": "getAllStates",
     "description": "GraphQL-based function to get all workflow states in a specified Linear team",
     "parameters": {
         "type": "object",
@@ -346,7 +346,7 @@ GET_STATES_SCHEMA = {
 # Schema for filtering projects
 FILTER_PROJECTS_SCHEMA = {
     "type": "function",
-    "name": "filter_linear_projects",
+    "name": "filterProjects",
     "description": "GraphQL-based function to filter projects in Linear based on various criteria",
     "parameters": {
         "type": "object",
@@ -383,7 +383,7 @@ FILTER_PROJECTS_SCHEMA = {
 # Schema for filtering cycles
 FILTER_CYCLES_SCHEMA = {
     "type": "function",
-    "name": "filter_linear_cycles",
+    "name": "filterCycles",
     "description": "GraphQL-based function to filter cycles in Linear based on various criteria",
     "parameters": {
         "type": "object",
@@ -412,7 +412,7 @@ FILTER_CYCLES_SCHEMA = {
 # Schema for creating comments
 CREATE_COMMENT_SCHEMA = {
     "type": "function",
-    "name": "create_linear_comment",
+    "name": "createComment",
     "description": "GraphQL-based function to create a new comment on a Linear issue",
     "parameters": {
         "type": "object",
@@ -431,21 +431,40 @@ CREATE_COMMENT_SCHEMA = {
     }
 }
 
+# Schema for getting current user
+GET_CURRENT_USER_SCHEMA = {
+    "type": "function",
+    "name": "getCurrentUser",
+    "description": "Get information about a specific user by their Slack display name",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "slack_display_name": {
+                "type": "string",
+                "description": "The Slack display name of the user to look up (e.g. '@username')"
+            }
+        },
+        "required": ["slack_display_name"],
+        "additionalProperties": False
+    }
+}
+
 # Collection of all schemas
 LINEAR_SCHEMAS = {
-    "filter_issues": FILTER_ISSUES_SCHEMA,
-    "create_issue": CREATE_ISSUE_SCHEMA,
-    "update_issue": UPDATE_ISSUE_SCHEMA,
-    "filter_comments": FILTER_COMMENTS_SCHEMA,
-    "filter_attachments": FILTER_ATTACHMENTS_SCHEMA,
-    "get_users": GET_USERS_SCHEMA,
-    "get_projects": GET_PROJECTS_SCHEMA,
-    "get_cycles": GET_CYCLES_SCHEMA,
-    "get_labels": GET_LABELS_SCHEMA,
-    "get_states": GET_STATES_SCHEMA,
-    "filter_projects": FILTER_PROJECTS_SCHEMA,
-    "filter_cycles": FILTER_CYCLES_SCHEMA,
-    "create_comment": CREATE_COMMENT_SCHEMA
+    "filterIssues": FILTER_ISSUES_SCHEMA,
+    "createIssue": CREATE_ISSUE_SCHEMA,
+    "updateIssue": UPDATE_ISSUE_SCHEMA,
+    "filterComments": FILTER_COMMENTS_SCHEMA,
+    "filterAttachments": FILTER_ATTACHMENTS_SCHEMA,
+    "getAllUsers": GET_USERS_SCHEMA,
+    "getAllProjects": GET_PROJECTS_SCHEMA,
+    "getAllCycles": GET_CYCLES_SCHEMA,
+    "getAllLabels": GET_LABELS_SCHEMA,
+    "getAllStates": GET_STATES_SCHEMA,
+    "filterProjects": FILTER_PROJECTS_SCHEMA,
+    "filterCycles": FILTER_CYCLES_SCHEMA,
+    "createComment": CREATE_COMMENT_SCHEMA,
+    "getCurrentUser": GET_CURRENT_USER_SCHEMA
 }
 
 
@@ -454,6 +473,7 @@ import json
 from openai import OpenAI
 import os
 import dotenv
+from ops_linear_db.linear_client import LinearClient
 
 dotenv.load_dotenv()
 
@@ -489,7 +509,7 @@ def test_linear_filter(user_query: str, openai_api_key: str) -> List[dict]:
             input=[
                 {"role": "user", "content": enhanced_query}
             ],
-            tools=[LINEAR_SCHEMAS["filter_issues"]]
+            tools=[LINEAR_SCHEMAS["filterIssues"]]
         )
         
         # Print raw response
@@ -611,9 +631,6 @@ def test_linear_filter(user_query: str, openai_api_key: str) -> List[dict]:
         if limit:
             print(f"Limit: {limit}")
         print("--------------------\n")
-        
-        # Import here to avoid circular imports
-        from linear_db.linear_client import LinearClient
         
         # Get the Linear client
         linear = LinearClient(os.getenv('LINEAR_API_KEY'))

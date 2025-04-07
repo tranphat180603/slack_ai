@@ -17,3 +17,4 @@ venv/
 *.swo
 docker-compose.yml
 Dockerfile
+.cursor

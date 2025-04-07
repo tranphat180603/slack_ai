@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from datetime import datetime
 import time
 
-from .models import Base, Conversation, Message
+from .conversation_models import Base, Conversation, Message
 
 load_dotenv()
 
@@ -201,7 +201,7 @@ def cleanup_old_conversations(hours: int = 24) -> int:
     """
     from sqlalchemy import delete
     from sqlalchemy.orm import Session
-    from conversation_db.models import Conversation
+    from ops_conversation_db.conversation_models import Conversation
     from datetime import datetime, timedelta
     
     cutoff_time = datetime.utcnow() - timedelta(hours=hours)

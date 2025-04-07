@@ -7,7 +7,7 @@ This schema can be used with OpenAI function calling to find Linear content base
 SEMANTIC_SEARCH_SCHEMA = {
     "type": "function",
     "name": "semantic_search_linear",
-    "description": "Find Linear content (issues, projects, comments) semantically similar to a natural language query. Returns results with metadata that can be used for further filtering with other Linear functions.",
+    "description": "Find Linear content (by loosely matching the content of issues, projects, comments) semantically similar to a natural language query. Returns results with metadata that can be used for further filtering with other Linear functions. Used when the query mentions about a name or description of issues, projects, comments, etc.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -44,7 +44,7 @@ SEMANTIC_SEARCH_SCHEMA = {
 
 # Collection of all semantic search schemas
 SEMANTIC_SEARCH_SCHEMAS = {
-    "semantic_search": SEMANTIC_SEARCH_SCHEMA
+    "semantic_search_linear": SEMANTIC_SEARCH_SCHEMA
 }
 
 
