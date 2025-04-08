@@ -289,6 +289,7 @@ def rerank_results(query: str, candidates: List[Dict], limit: int = 5) -> List[D
     # Prepare candidate texts with their IDs for the LLM
     candidate_texts = []
     for i, item in enumerate(candidates):
+        logger.info(f"Processing candidate {i} of {len(candidates)}")
         try:
             # Safely extract fields with fallbacks
             object_type = item.get('object_type', 'Unknown')

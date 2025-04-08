@@ -7,34 +7,34 @@ This schema can be used with OpenAI function calling to find Linear content base
 SEMANTIC_SEARCH_SCHEMA = {
     "type": "function",
     "name": "semantic_search_linear",
-    "description": "Find Linear content (by loosely matching the content of issues, projects, comments) semantically similar to a natural language query. Returns results with metadata that can be used for further filtering with other Linear functions. Used when the query mentions about a name or description of issues, projects, comments, etc.",
+    "description": "IMPORTANT: Only use this for natural language concept searches. DO NOT use for finding specific issues by ID, number, or exact name - use filterIssues instead. This function performs semantic search to find content related to concepts expressed in natural language, across issues, projects, and comments in Linear. The search uses embeddings and semantic similarity, not exact matching. Leave parameters empty or omit them entirely rather than providing zero, empty string, or null values.",
     "parameters": {
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Natural language query to search for (e.g., 'issues about improving the agent' or 'database migration problems')"
+                "description": "Natural language query describing concepts or topics (e.g., 'database migration problems' or 'UI responsiveness'). DO NOT use for specific issue lookups like 'Task #1234' or exact titles."
             },
             "limit": {
                 "type": "integer",
-                "description": "Maximum number of results to return",
+                "description": "Maximum number of results to return. Omit rather than providing zero."
             },
             "use_reranker": {
                 "type": "boolean",
-                "description": "Whether to apply LLM-based reranking to improve search results",
+                "description": "Whether to apply LLM-based reranking to improve search results. Only specify if needed."
             },
             "candidate_pool_size": {
                 "type": "integer",
-                "description": "Size of the initial candidate pool for reranking (only used when use_reranker=true)",
+                "description": "Size of the initial candidate pool for reranking (only used when use_reranker=true). Omit rather than providing zero."
             },
             "team_key": {
                 "type": "string",
-                "description": "Filter results by team key",
+                "description": "Filter results by team key. Omit rather than providing an empty string.",
                 "enum": ["ENG", "OPS", "RES", "AI", "MKT", "PRO"]
             },
             "object_type": {
                 "type": "string",
-                "description": "Filter results by object type",
+                "description": "Filter results by object type. Omit rather than providing an empty string.",
                 "enum": ["Issue", "Project", "Comment"]
             }
         },

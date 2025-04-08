@@ -7,58 +7,58 @@ These schemas can be used with OpenAI function calling to interact with Linear.
 FILTER_ISSUES_SCHEMA = {
     "type": "function",
     "name": "filterIssues",
-    "description": "GraphQL-based function to filter Linear issues based on various criteria such as state, priority, assignee, etc.",
+    "description": "GraphQL-based function to filter Linear issues based on various criteria such as state, priority, assignee, etc. Leave parameters empty or omit them entirely rather than providing zero, empty string, or null values.",
     "parameters": {
         "type": "object",
         "properties": {
-            "team_key": {
+            "teamKey": {
                 "type": "string",
                 "description": "The team key to filter issues by",
                 "enum": ["ENG", "OPS", "RES", "AI", "MKT", "PRO"]
             },
             "state": {
                 "type": "string",
-                "description": "Filter by issue state (e.g. 'In Progress', 'Todo', 'Done')"
+                "description": "Filter by issue state (e.g. 'In Progress', 'Todo', 'Done'). Omit if no specific state filter is needed."
             },
             "priority": {
                 "type": "number",
-                "description": "Filter by priority level (0.0: None, 1.0: Urgent, 2.0: High, 3.0: Medium, 4.0: Low)",
+                "description": "Filter by priority level (1.0: Urgent, 2.0: High, 3.0: Medium, 4.0: Low). Omit this field rather than using 0 if no priority filter is needed.",
                 "enum": [0.0, 1.0, 2.0, 3.0, 4.0]
             },
             "assignee_name": {
                 "type": "string",
-                "description": "Filter by assignee's display name. Supports exact match. Use assignee_contains for partial matches."
+                "description": "Filter by assignee's display name. Supports exact match. Omit if no assignee filter is needed."
             },
             "assignee_contains": {
                 "type": "string",
-                "description": "Filter by assignee names containing this text (case-insensitive)"
+                "description": "Filter by assignee names containing this text (case-insensitive). Omit rather than providing an empty string."
             },
             "title_contains": {
                 "type": "string",
-                "description": "Filter issues where title contains this string"
+                "description": "Filter issues where title contains this string. Omit rather than providing an empty string."
             },
             "description_contains": {
                 "type": "string",
-                "description": "Filter issues where description contains this string"
+                "description": "Filter issues where description contains this string. Omit rather than providing an empty string."
             },
-            "cycle_name": {
-                "type": "string",
-                "description": "Filter by cycle name"
+            "cycle_number": {
+                "type": "integer",
+                "description": "Filter by cycle number (numeric identifier). Omit rather than providing zero if no cycle filter is needed."
             },
-            "project_name": {
+            "project_id": {
                 "type": "string",
-                "description": "Filter by project name"
+                "description": "Filter by project ID. Omit rather than providing an empty string."
             },
             "label_name": {
                 "type": "string",
-                "description": "Filter by label name"
+                "description": "Filter by label name. Omit rather than providing an empty string."
             },
             "first": {
                 "type": "number",
-                "description": "Limit the number of issues returned"
+                "description": "Limit the number of issues returned. Use a positive integer."
             }
         },
-        "required": ["team_key"],
+        "required": ["teamKey"],
         "additionalProperties": False
     }
 }
@@ -71,7 +71,7 @@ CREATE_ISSUE_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "team_key": {
+            "teamKey": {
                 "type": "string",
                 "description": "The team key where the issue will be created",
                 "enum": ["ENG", "OPS", "RES", "AI", "MKT", "PRO"]
@@ -121,7 +121,7 @@ CREATE_ISSUE_SCHEMA = {
                 "description": "Issue number of the parent issue"
             }
         },
-        "required": ["team_key", "title"],
+        "required": ["teamKey", "title"],
         "additionalProperties": False
     }
 }
@@ -196,7 +196,7 @@ UPDATE_ISSUE_SCHEMA = {
 FILTER_COMMENTS_SCHEMA = {
     "type": "function",
     "name": "filterComments",
-    "description": "GraphQL-based function to filter comments in Linear based on various criteria",
+    "description": "GraphQL-based function to filter comments in Linear based on various criteria. Leave parameters empty or omit them entirely rather than providing zero, empty string, or null values.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -206,15 +206,11 @@ FILTER_COMMENTS_SCHEMA = {
             },
             "user_display_name": {
                 "type": "string",
-                "description": "Filter comments by user display name"
+                "description": "Filter comments by user display name. Omit rather than providing an empty string."
             },
-            "contains": {
+            "body_contains": {
                 "type": "string",
-                "description": "Filter comments containing this text (case-sensitive)"
-            },
-            "contains_ignore_case": {
-                "type": "string",
-                "description": "Filter comments containing this text (case-insensitive)"
+                "description": "Filter comments where body contains this text. Omit rather than providing an empty string."
             }
         },
         "required": ["issue_number"],
@@ -226,7 +222,7 @@ FILTER_COMMENTS_SCHEMA = {
 FILTER_ATTACHMENTS_SCHEMA = {
     "type": "function",
     "name": "filterAttachments",
-    "description": "GraphQL-based function to filter attachments in Linear based on various criteria",
+    "description": "GraphQL-based function to filter attachments in Linear based on various criteria. Leave parameters empty or omit them entirely rather than providing zero, empty string, or null values.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -236,11 +232,11 @@ FILTER_ATTACHMENTS_SCHEMA = {
             },
             "title_contains": {
                 "type": "string",
-                "description": "Filter attachments where title contains this string"
+                "description": "Filter attachments where title contains this string. Omit rather than providing an empty string."
             },
             "creator_display_name": {
                 "type": "string",
-                "description": "Filter attachments by creator display name"
+                "description": "Filter attachments by creator display name. Omit rather than providing an empty string."
             }
         },
         "required": ["issue_number"],
@@ -256,13 +252,13 @@ GET_USERS_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "team_key": {
+            "teamKey": {
                 "type": "string",
                 "description": "The team key to get users from",
                 "enum": ["ENG", "OPS", "RES", "AI", "MKT", "PRO"]
             }
         },
-        "required": ["team_key"],
+        "required": ["teamKey"],
         "additionalProperties": False
     }
 }
@@ -275,13 +271,13 @@ GET_PROJECTS_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "team_key": {
+            "teamKey": {
                 "type": "string",
                 "description": "The team key to get projects from",
                 "enum": ["ENG", "OPS", "RES", "AI", "MKT", "PRO"]
             }
         },
-        "required": ["team_key"],
+        "required": ["teamKey"],
         "additionalProperties": False
     }
 }
@@ -290,17 +286,17 @@ GET_PROJECTS_SCHEMA = {
 GET_CYCLES_SCHEMA = {
     "type": "function",
     "name": "getAllCycles",
-    "description": "GraphQL-based function to get all cycles in a specified Linear team",
+    "description": "GraphQL-based function to get all cycles up to the current cycle in a specified Linear team. The largest cycle number is the current cycle and the rest are past cycles in chronological order.",
     "parameters": {
         "type": "object",
         "properties": {
-            "team_key": {
+            "teamKey": {
                 "type": "string",
                 "description": "The team key to get cycles from",
                 "enum": ["ENG", "OPS", "RES", "AI", "MKT", "PRO"]
             }
         },
-        "required": ["team_key"],
+        "required": ["teamKey"],
         "additionalProperties": False
     }
 }
@@ -313,13 +309,13 @@ GET_LABELS_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "team_key": {
+            "teamKey": {
                 "type": "string",
                 "description": "The team key to get labels from",
                 "enum": ["ENG", "OPS", "RES", "AI", "MKT", "PRO"]
             }
         },
-        "required": ["team_key"],
+        "required": ["teamKey"],
         "additionalProperties": False
     }
 }
@@ -332,13 +328,13 @@ GET_STATES_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "team_key": {
+            "teamKey": {
                 "type": "string",
                 "description": "The team key to get workflow states from",
                 "enum": ["ENG", "OPS", "RES", "AI", "MKT", "PRO"]
             }
         },
-        "required": ["team_key"],
+        "required": ["teamKey"],
         "additionalProperties": False
     }
 }
@@ -347,34 +343,30 @@ GET_STATES_SCHEMA = {
 FILTER_PROJECTS_SCHEMA = {
     "type": "function",
     "name": "filterProjects",
-    "description": "GraphQL-based function to filter projects in Linear based on various criteria",
+    "description": "GraphQL-based function to filter projects in Linear based on various criteria. Leave parameters empty or omit them entirely rather than providing zero, empty string, or null values.",
     "parameters": {
         "type": "object",
         "properties": {
-            "team_key": {
+            "teamKey": {
                 "type": "string",
-                "description": "Filter projects by team key",
+                "description": "Filter projects by team key. Only provide if you need to filter by team.",
                 "enum": ["ENG", "OPS", "RES", "AI", "MKT", "PRO"]
             },
             "name": {
                 "type": "string", 
-                "description": "Exact match for project name"
+                "description": "Exact match for project name. Omit rather than providing an empty string."
             },
             "name_contains": {
                 "type": "string",
-                "description": "Filter projects where name contains this string (case-sensitive)"
-            },
-            "name_contains_ignore_case": {
-                "type": "string",
-                "description": "Filter projects where name contains this string (case-insensitive)"
+                "description": "Filter projects where name contains this string (case-sensitive). Omit rather than providing an empty string."
             },
             "state": {
                 "type": "string",
-                "description": "Filter by project state (e.g. 'planned', 'started', 'completed')"
+                "description": "Filter by project state (e.g. 'planned', 'started', 'completed'). Omit rather than providing an empty string."
             },
             "lead_display_name": {
                 "type": "string",
-                "description": "Filter by project lead's display name"
+                "description": "Filter by project lead's display name. Omit rather than providing an empty string."
             }
         }
     }
@@ -384,26 +376,30 @@ FILTER_PROJECTS_SCHEMA = {
 FILTER_CYCLES_SCHEMA = {
     "type": "function",
     "name": "filterCycles",
-    "description": "GraphQL-based function to filter cycles in Linear based on various criteria",
+    "description": "GraphQL-based function to filter cycles in Linear based on various criteria. Leave parameters empty or omit them entirely rather than providing zero, empty string, or null values.",
     "parameters": {
         "type": "object",
         "properties": {
-            "team_key": {
+            "teamKey": {
                 "type": "string",
-                "description": "Filter cycles by team key",
+                "description": "Filter cycles by team key. Only provide if you need to filter by team.",
                 "enum": ["ENG", "OPS", "RES", "AI", "MKT", "PRO"]
             },
-            "name": {
-                "type": "string",
-                "description": "Exact match for cycle name"
+            "number": {
+                "type": "integer",
+                "description": "Filter by cycle number (numeric identifier). Omit rather than providing zero if no specific cycle is needed."
             },
-            "name_contains": {
+            "starts_at": {
                 "type": "string",
-                "description": "Filter cycles where name contains this string"
+                "description": "Filter by cycle start date (format: YYYY-MM-DD). Omit rather than providing an empty string."
             },
-            "is_active": {
+            "ends_at": {
+                "type": "string",
+                "description": "Filter by cycle end date (format: YYYY-MM-DD). Omit rather than providing an empty string."
+            },
+            "filter_by_start_date": {
                 "type": "boolean",
-                "description": "Filter for active/inactive cycles"
+                "description": "Whether to only include cycles that have started. Only specify if you need to change from the default (true)."
             }
         }
     }
@@ -566,7 +562,7 @@ def test_linear_filter(user_query: str, openai_api_key: str) -> List[dict]:
                                 try:
                                     # Try to parse the text as JSON
                                     parsed = json.loads(content_item.text)
-                                    if isinstance(parsed, dict) and 'team_key' in parsed:
+                                    if isinstance(parsed, dict) and 'teamKey' in parsed:
                                         print("Found parameters in text output!")
                                         message_parameters = parsed
                                         break
@@ -580,7 +576,7 @@ def test_linear_filter(user_query: str, openai_api_key: str) -> List[dict]:
         
         # Build the Linear API filter
         filter_criteria = {
-            "team": {"key": {"eq": parameters["team_key"]}}
+            "team": {"key": {"eq": parameters["teamKey"]}}
         }
         
         if "state" in parameters:
@@ -607,12 +603,12 @@ def test_linear_filter(user_query: str, openai_api_key: str) -> List[dict]:
         if "description_contains" in parameters:
             filter_criteria["description"] = {"contains": parameters["description_contains"]}
         
-        if "cycle_name" in parameters:
-            filter_criteria["cycle"] = {"name": {"eq": parameters["cycle_name"]}}
-            
-        if "project_name" in parameters:
-            filter_criteria["project"] = {"name": {"eq": parameters["project_name"]}}
-            
+        if "cycle_number" in parameters:
+            filter_criteria["cycle"] = {"number": {"eq": parameters["cycle_number"]}}
+        
+        if "project_id" in parameters:
+            filter_criteria["project"] = {"id": {"eq": parameters["project_id"]}}
+        
         if "label_name" in parameters:
             filter_criteria["labels"] = {"some": {"name": {"eq": parameters["label_name"]}}}
         

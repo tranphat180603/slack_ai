@@ -26,7 +26,7 @@ from tools.tool_schema_semantic_search import SEMANTIC_SEARCH_SCHEMAS
 from rate_limiter import global_limiter, slack_limiter, linear_limiter, openai_limiter
 from ops_linear_db.linear_client import LinearClient
 from utils import safe_append, format_for_slack
-from agent import Commander, Captain, Soldier
+from agent import Commander, Captain, Soldier, get_api_call_tracker, log_api_call_report
 from context_manager import context_manager
 
 # Tool configuration
@@ -91,6 +91,7 @@ class ProgressiveMessageHandler:
         self.stages_pending = []
         self.stop_requested = False
         self.interaction_ts = None  # Timestamp of the most recent interaction message
+        self.progress_message_ids = []  # Track IDs of progress messages
     
     async def send_thinking_message(self, initial=True):
         """Send or update the thinking message."""
@@ -134,20 +135,20 @@ class ProgressiveMessageHandler:
     
     def _build_thinking_blocks(self):
         """Build the blocks for the thinking message."""
-        # Construct status text showing completed and pending stages
-        status_text = "*Status:*\n```\n"
-        
-        for stage in self.stages_completed:
-            status_text += f"✓ {stage}\n"
-        
-        if self.current_stage in self.stages_pending:
-            status_text += f"➤ {self.current_stage}\n"
-        
-        for stage in self.stages_pending:
-            if stage != self.current_stage:
-                status_text += f"  {stage}\n"
+        # If no stages completed yet, show a simple thinking message
+        if not self.stages_completed and not self.current_stage:
+            status_text = "*Working on your request...*"
+        else:
+            # Otherwise, construct status text showing only completed and current stage
+            status_text = "*Status:*\n```\n"
+            
+            for stage in self.stages_completed:
+                status_text += f"✓ {stage}\n"
+            
+            if self.current_stage:
+                status_text += f"➤ {self.current_stage}\n"
                 
-        status_text += "```"
+            status_text += "```"
         
         return [
             {
@@ -212,6 +213,26 @@ class ProgressiveMessageHandler:
             )
         except SlackApiError as e:
             logger.warning(f"Could not delete thinking message: {e.response.get('error', '')}")
+            
+    async def delete_all_progress_messages(self):
+        """Delete all tracked progress messages."""
+        try:
+            # Delete thinking message first
+            await self.delete_thinking_message()
+            
+            # Delete all progress messages (Commander, Plan, Soldier execute)
+            for msg_ts in self.progress_message_ids:
+                try:
+                    await asyncio.to_thread(
+                        self.slack_client.chat_delete,
+                        channel=self.channel_id,
+                        ts=msg_ts
+                    )
+                except SlackApiError as e:
+                    logger.warning(f"Could not delete progress message {msg_ts}: {e.response.get('error', '')}")
+                    
+        except Exception as e:
+            logger.warning(f"Error deleting progress messages: {str(e)}")
 
     async def send_thinking_message_with_stop(self, initial=True):
         """Send or update the thinking message with a stop button."""
@@ -282,23 +303,38 @@ class ConversationManager:
         if self.conversation_key in self.conversation_history and self.conversation_history[self.conversation_key]:
             self.history = self.conversation_history[self.conversation_key]
             logger.debug(f"Using in-memory conversation history with {len(self.history)} messages")
-            return self._format_history_for_context(self.sender_name)
+            history_result = self._format_history_for_context(self.sender_name)
+            logger.debug(f"Returning formatted history with {len(history_result)} lines")
+            return history_result
         
         # Then try database
         db_messages = load_conversation_from_db(channel_id, thread_ts)
+            
         if db_messages:
             self.history = db_messages
             self.conversation_history[self.conversation_key] = db_messages
             logger.debug(f"Loaded conversation history from database with {len(db_messages)} messages")
-            return self._format_history_for_context(self.sender_name)
+            history_result = self._format_history_for_context(self.sender_name)
+            logger.debug(f"Returning formatted history with {len(history_result)} lines")
+            return history_result
         
         # Finally rebuild from Slack API
         try:
-            logger.debug(f"Fetching conversation history from Slack API for {channel_id}:{thread_ts}")
-            response = self.slack_client.conversations_replies(
-                channel=channel_id,
-                ts=thread_ts
-            )
+            if is_direct_message:
+                # For direct messages, fetch history from the channel
+                # But still filter by thread_ts when processing
+                logger.debug(f"Fetching DM history from Slack API for {channel_id}")
+                response = self.slack_client.conversations_history(
+                    channel=channel_id,
+                    limit=20  # Fetch last 20 messages
+                )
+            else:
+                # For threaded messages, fetch replies to the specific thread
+                logger.debug(f"Fetching threaded conversation from Slack API for {channel_id}:{thread_ts}")
+                response = self.slack_client.conversations_replies(
+                    channel=channel_id,
+                    ts=thread_ts
+                )
             
             if response.get("ok") and response.get("messages"):
                 messages = response.get("messages", [])
@@ -306,7 +342,18 @@ class ConversationManager:
                 
                 # Different handling for direct messages vs mentions
                 if is_direct_message:
-                    # For DMs, reverse messages for chronological order
+                    # For DMs using conversations_history, we need to filter to the specific thread
+                    # or just the main messages (those without a thread_ts)
+                    filtered_messages = []
+                    for msg in messages:
+                        msg_thread_ts = msg.get("thread_ts")
+                        # Keep messages from this thread or messages without a thread_ts
+                        if msg_thread_ts == thread_ts or (not msg_thread_ts and msg.get("ts") == thread_ts):
+                            filtered_messages.append(msg)
+                            
+                    logger.debug(f"Filtered to {len(filtered_messages)} messages for thread {thread_ts}")
+                    messages = filtered_messages
+                    # Still need to reverse for chronological order
                     messages.reverse()
                 else:
                     # For mentions, skip the first message
@@ -336,9 +383,27 @@ class ConversationManager:
                         continue
                         
                     # Skip processing messages
-                    if is_bot and ("TMAI processing your request..." in text or "TMAI's neuron firing" in text or "is thinking" in text):
+                    if is_bot and ("TMAI's neuron firing" in text or "is thinking" in text):
                         logger.debug(f"Skipping processing message: {text[:30]}...")
                         continue
+                    
+                    # Skip in-progress messages unless it's a real user message or a final greeting message
+                    # This helps with debugging but doesn't affect the conversation
+                    if is_bot and "Commander:" in text:
+                        logger.debug(f"Skipping intermediate Commander message")
+                        continue
+                        
+                    if is_bot and "Plan:" in text:
+                        logger.debug(f"Skipping intermediate Plan message")
+                        continue
+                        
+                    if is_bot and "Soldier execute:" in text:
+                        logger.debug(f"Skipping intermediate Soldier message")
+                        continue
+                    
+                    # Ensure we keep actual conversational messages
+                    # Check if this is likely a greeting or a final reply (not an intermediate message)
+                    is_final_response = is_bot and not any(marker in text for marker in ["Commander:", "Plan:", "Soldier execute:", "neuron firing", "is thinking"])
                     
                     # Skip default thread signal (only in DMs)
                     if is_direct_message and "New Assistant Thread" in text:
@@ -398,7 +463,7 @@ class ConversationManager:
         self.conversation_history[self.conversation_key].append(message)
         self.history = self.conversation_history[self.conversation_key]
     
-    def _format_history_for_context(self, sender_name: str = "User", max_messages: int = 20):
+    def _format_history_for_context(self, sender_name: str = "User", max_messages: int = 10):
         """Format conversation history for context."""
         if not self.history:
             return []
@@ -413,18 +478,22 @@ class ConversationManager:
         else:
             history_context = [f"**Here is the conversation history between you and {sender_name} so far:**"]
         
-        # Process messages in chronological order
+        # Format the messages for context
         for i, msg in enumerate(messages):
             if msg["role"] == "user":
                 # Format user messages with sender name
                 msg_content = msg['content']
-                history_context.append(f"**{sender_name}:** {msg_content}")
+                history_context.append(f"**{sender_name} (#{i} turn):** {msg_content}")
             else:
                 # Format assistant messages
                 content = msg["content"]
                 if len(content) > 500:
                     content = content[:500] + "... (content truncated)"
-                history_context.append(f"**Assistant:** {content}")
+                history_context.append(f"**Assistant (#{i - 1} turn):** {content}")
+        
+        # Add a separator at the end to clearly distinguish history from current query
+        if history_context:
+            history_context.append("--------------------------------------------------\n")
         
         return history_context
 
@@ -566,52 +635,81 @@ class TMAISlackAgent:
         logger.debug(f"Extracted {len(urls)} URLs")
         return urls
     
+    async def execute_batch(self, plan, ready_functions, user_query, previous_results):
+        """Execute a batch of functions concurrently."""
+        logger.debug(f"Executing batch of {len(ready_functions)} functions: {ready_functions}")
+        
+        # Create tasks for all ready functions
+        tasks = []
+        for function_name in ready_functions:
+            task = self.soldier.execute(
+                plan=plan,
+                function_name=function_name,
+                user_query=user_query,
+                previous_results=previous_results
+            )
+            tasks.append(task)
+        
+        # Execute all functions concurrently
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Process results and handle any exceptions
+        execution_results = {}
+        for i, result in enumerate(results):
+            function_name = ready_functions[i]
+            if isinstance(result, Exception):
+                logger.error(f"Error executing {function_name}: {str(result)}")
+                execution_results[function_name] = {
+                    "function": function_name,
+                    "error": str(result),
+                    "result": None
+                }
+            else:
+                execution_results[function_name] = result
+                
+        return execution_results
+
     async def process_slack_message(self, ai_request: AIRequest, thread_ts: Optional[str] = None, 
                                is_direct_message: bool = False, model_overrides: Optional[Dict[str, str]] = None):
         """
         Process messages using the Commander-Captain-Soldier agent workflow.
-        
-        Args:
-            ai_request: The AI request object containing user, channel, text
-            thread_ts: Optional thread timestamp (required for mentions)
-            is_direct_message: Whether this is a direct message
-            model_overrides: Optional dict to override models for specific phases
         """
+        # Start measuring execution time 
         start_time = time.time()
-        logger.info(f"Processing message from user {ai_request.user_id}")
         
-        # Apply any model overrides
-        model_overrides = model_overrides or {}
-        if model_overrides:
-            # Create a temporary model config with overrides
-            temp_model_config = self.model_config.copy()
-            temp_model_config.update(model_overrides)
-            logger.info(f"Using model overrides: {model_overrides}")
-        else:
-            temp_model_config = self.model_config
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"Using default model config: {self.model_config}")
+        # Determine if this is in a thread
+        effective_thread_ts = thread_ts or ai_request.message_ts
         
-        # Update agent models if overrides provided
-        if "commander" in temp_model_config:
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"Creating Commander with model: {temp_model_config['commander']}")
-            self.commander = Commander(model=temp_model_config["commander"], prompts=self.prompts)
-        if "captain" in temp_model_config:
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"Creating Captain with model: {temp_model_config['captain']}")
-            self.captain = Captain(model=temp_model_config["captain"], prompts=self.prompts)
-        if "soldier" in temp_model_config:
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"Creating Soldier with model: {temp_model_config['soldier']}")
-            self.soldier = Soldier(model=temp_model_config["soldier"], prompts=self.prompts)
-        
-        # For direct messages, get thread_ts from request; for mentions, use the provided parameter
-        effective_thread_ts = ai_request.thread_ts if is_direct_message else thread_ts
+        # Generate a conversation key - standard format for all types
         conversation_key = f"{ai_request.channel_id}:{effective_thread_ts}"
+        logger.debug(f"Generated conversation_key: {conversation_key} (DM: {is_direct_message})")
+        
+        # Apply any model overrides for this request
+        temp_model_config = self.model_config.copy()
+        if model_overrides:
+            temp_model_config.update(model_overrides)
+            
+            # Re-initialize affected components with the overridden models
+            if "commander" in temp_model_config:
+                self.model_config["commander"] = temp_model_config["commander"]  # Update base model_config as well
+                logger.debug(f"Creating Commander with model: {temp_model_config['commander']}")
+                self.commander = Commander(model=temp_model_config["commander"], prompts=self.prompts)
+                
+            if "captain" in temp_model_config:
+                self.model_config["captain"] = temp_model_config["captain"]
+                logger.debug(f"Creating Captain with model: {temp_model_config['captain']}")
+                self.captain = Captain(model=temp_model_config["captain"], prompts=self.prompts)
+                
+            if "soldier" in temp_model_config:
+                self.model_config["soldier"] = temp_model_config["soldier"]
+                logger.debug(f"Creating Soldier with model: {temp_model_config['soldier']}")
+                self.soldier = Soldier(model=temp_model_config["soldier"], prompts=self.prompts)
         
         # Initialize progressive message handler
         message_handler = ProgressiveMessageHandler(self.slack_client, ai_request.channel_id, ai_request.message_ts, effective_thread_ts)
+        
+        # Don't add all pending stages at the beginning anymore
+        # We'll add them as they become active
         
         try:
             # Check rate limiting
@@ -666,15 +764,32 @@ class TMAISlackAgent:
             # If history_for_commander is a list, convert it to a string
             if isinstance(history_for_commander, list):
                 history_for_commander = "\n".join(history_for_commander)
+            logger.debug(f"History for commander: {history_for_commander}")
             
-            # 1. Commander: Assign tasks between platforms
+            # 1. Update stage BEFORE Commander API call
             message_handler.update_stage("Commander assigning tasks")
             await message_handler.send_thinking_message(initial=False)
             
+            # Make the Commander API call
             commander_result = self.commander.assign_tasks(
                 user_query= "Current prompt from: " + ai_request.sender_name + ":" + ai_request.text,
                 history=history_for_commander
             )
+            
+            # Mark Commander stage as completed AFTER API call
+            message_handler.update_stage("Commander assigning tasks", completed=True)
+            
+            # Display Commander results in code block - simplified to show only the order text
+            order = commander_result.get('order', ai_request.text)
+            commander_output = f"```\n{order}\n```"
+            response = await asyncio.to_thread(
+                self.slack_client.chat_postMessage,
+                channel=ai_request.channel_id,
+                thread_ts=effective_thread_ts,
+                text=f"Commander: {commander_output}"
+            )
+            # Track message ID for later deletion
+            message_handler.progress_message_ids.append(response['ts'])
             
             logger.info(f"Commander assigned platforms: {commander_result.get('platform', [])}")
             context_manager.add_context(context['context_id'], 'commander_result', commander_result)
@@ -685,183 +800,306 @@ class TMAISlackAgent:
             if isinstance(platforms, str):
                 platforms = [platforms]
                 logger.debug(f"Converted platform string '{platforms[0]}' to list")
-            order = commander_result.get('order', ai_request.text)
-            
-            message_handler.update_stage("Commander assigning tasks", completed=True)
             
             # If no platforms, send direct response
             if not platforms or platforms == ["direct_response"]:
-                message_handler.update_stage("Direct response", completed=True)
+                message_handler.update_stage("Direct response")
                 await message_handler.send_thinking_message(initial=False)
                 
                 # Generate direct response
                 final_response = self.commander.response(order, {})
                 
+                # Mark Direct response as completed
+                message_handler.update_stage("Direct response", completed=True)
+                
                 # Send final message and delete thinking message
                 await self._send_response(final_response, ai_request, effective_thread_ts)
-                await message_handler.delete_thinking_message()
+                # Delete all progress messages instead of just the thinking message
+                await message_handler.delete_all_progress_messages()
 
                 # Add to conversation history
                 await conversation_manager.add_message("user", ai_request.text, ai_request.message_ts)
                 await conversation_manager.add_message("assistant", final_response)
                 
+                # Log token and API call usage if in debug mode
+                if logger.isEnabledFor(logging.DEBUG):
+                    for agent in [self.commander, self.captain, self.soldier]:
+                        agent.client.log_token_usage(logging.DEBUG)
+                    
+                    # Log API call report
+                    log_api_call_report(logging.DEBUG)
+                
                 return
-            
-            # Main execution loop
-            execution_continues = True
-            max_iterations = 3  # Prevent infinite loops
-            iteration = 0
             
             # Replace regular thinking message with one that has a stop button
             await message_handler.send_thinking_message_with_stop(initial=False)
             
-            while execution_continues and iteration < max_iterations:
+            # Initialize execution variables
+            max_iterations = 5  # Prevent infinite loops
+            iteration = 0
+            current_order = order
+            execution_results = {}
+            should_replan = True  # Control whether to call planning in each iteration
+            current_plan = None   # Keep track of current plan
+            
+            # Main execution loop
+            while iteration < max_iterations:
                 iteration += 1
+                logger.info(f"Starting execution iteration {iteration}")
                 
                 # Check if a stop was requested
                 if context_manager.get_context(context['context_id']).get('stop_requested', False):
                     logger.info(f"Stop requested for context {context['context_id']}, breaking execution loop")
                     break
                 
-                # 2. Captain: Plan execution
-                message_handler.update_stage("Captain planning functions")
-                await message_handler.send_thinking_message_with_stop(initial=False)
-                
-                plan = self.captain.plan(order, platforms)
-                logger.info(f"Captain planned {len(plan.get('functions', {}).get('ready_to_execute', []))} functions")
-                
-                # Store plan in context
-                context_manager.add_context(context['context_id'], 'current_plan', plan)
-                
-                message_handler.update_stage("Captain planning functions", completed=True)
+                # 2. Captain: Planning step (only when needed)
+                if should_replan:
+                    # Update stage BEFORE Captain API call
+                    message_handler.update_stage(f"Captain planning functions (iteration {iteration})")
+                    await message_handler.send_thinking_message_with_stop(initial=False)
+                    
+                    # Make the Captain API call for planning
+                    if iteration > 1 or execution_results:
+                        current_plan = self.captain.plan(current_order, platforms, execution_results)
+                    else:
+                        current_plan = self.captain.plan(current_order, platforms)
+                    
+                    # Mark Captain planning as completed AFTER API call
+                    message_handler.update_stage(f"Captain planning functions (iteration {iteration})", completed=True)
+                    
+                    # Display Plan results in code block - simplified to show only plan_description
+                    plan_description = current_plan.get('plan_description', 'No plan description available')
+                    
+                    # Clean up Jinja template conditionals from plan description if they exist
+                    if "{% if previous_results %}" in plan_description:
+                        # Remove the conditional and just keep the main content
+                        plan_description = plan_description.split("{% if previous_results %}")[0].strip()
+                    
+                    plan_output = f"```\n{plan_description}\n```"
+                    response = await asyncio.to_thread(
+                        self.slack_client.chat_postMessage,
+                        channel=ai_request.channel_id,
+                        thread_ts=effective_thread_ts,
+                        text=f"Plan: {plan_output}"
+                    )
+                    # Track message ID for later deletion
+                    message_handler.progress_message_ids.append(response['ts'])
+                        
+                    # Log plan information
+                    if 'function_levels' in current_plan:
+                        total_functions = sum(len(level) for level in current_plan['function_levels'])
+                        logger.info(f"Captain planned {total_functions} functions across {len(current_plan['function_levels'])} levels")
+                    else:
+                        logger.warning("Plan doesn't contain function_levels structure")
+                    
+                    # Store plan in context
+                    context_manager.add_context(context['context_id'], 'current_plan', current_plan)
+                    
+                    # Reset should_replan flag after planning
+                    should_replan = False
+                else:
+                    logger.info("Reusing existing plan - no need to replan")
                 
                 # Check if a stop was requested before continuing
                 if context_manager.get_context(context['context_id']).get('stop_requested', False):
                     logger.info(f"Stop requested after planning for context {context['context_id']}")
                     break
                 
-                # Get functions ready to execute
-                ready_functions = plan.get('functions', {}).get('ready_to_execute', [])
+                # Get function levels to execute
+                function_levels = current_plan.get('function_levels', [])
                 
-                # If no functions ready, send direct response
-                if not ready_functions:
-                    message_handler.update_stage("No functions to execute", completed=True)
+                # If no functions in plan, generate response with what we have
+                if not function_levels or all(len(level) == 0 for level in function_levels):
+                    message_handler.update_stage("No functions to execute")
                     await message_handler.send_thinking_message_with_stop(initial=False)
                     
+                    # Mark no functions stage as completed
+                    message_handler.update_stage("No functions to execute", completed=True)
+                    
                     # Generate response from Commander
-                    final_response = self.commander.response(order, {})
+                    final_response = self.commander.response(order, execution_results)
                     
                     # Send final message and delete thinking message
                     await self._send_response(final_response, ai_request, effective_thread_ts)
-                    await message_handler.delete_thinking_message()
+                    # Delete all progress messages instead of just the thinking message
+                    await message_handler.delete_all_progress_messages()
                     
                     # Add to conversation history
                     await conversation_manager.add_message("user", ai_request.text, ai_request.message_ts)
                     await conversation_manager.add_message("assistant", final_response)
                     
+                    # Log token and API call usage if in debug mode
+                    if logger.isEnabledFor(logging.DEBUG):
+                        for agent in [self.commander, self.captain, self.soldier]:
+                            agent.client.log_token_usage(logging.DEBUG)
+                        
+                        # Log API call report
+                        log_api_call_report(logging.DEBUG)
+                    
                     return
                 
-                # 3. Execute each function
-                execution_results = {}
-                for function_name in ready_functions:
-                    # Check if a stop was requested before each function execution
+                # 3. Execute functions level by level
+                all_functions_executed = True  # Flag to track execution completion
+                all_level_results = {}  # Store all level results for display
+                
+                for level_index, level_functions in enumerate(function_levels):
+                    # Skip empty levels
+                    if not level_functions:
+                        continue
+                        
+                    # Update stage BEFORE executing functions
+                    message_handler.update_stage(f"Executing level {level_index+1}: {len(level_functions)} functions")
+                    await message_handler.send_thinking_message_with_stop(initial=False)
+                    
+                    # Check for stop request before executing level
                     if context_manager.get_context(context['context_id']).get('stop_requested', False):
-                        logger.info(f"Stop requested before executing {function_name} for context {context['context_id']}")
+                        logger.info(f"Stop requested before executing level {level_index+1}")
+                        all_functions_executed = False
                         break
                     
-                    message_handler.update_stage(f"Executing {function_name}")
-                    await message_handler.send_thinking_message_with_stop(initial=False)
+                    # Execute all functions in this level in parallel
+                    try:
+                        level_results = await self.execute_batch(
+                            plan=current_plan,
+                            ready_functions=level_functions,
+                            user_query=current_order,
+                            previous_results=execution_results
+                        )
+                        
+                        # Store level results for display
+                        all_level_results[f"level_{level_index+1}"] = level_results
+                        
+                        # Update execution results with results from this level
+                        execution_results.update(level_results)
+                        context_manager.add_context(context['context_id'], 'execution_results', execution_results)
+                        
+                        # Mark function execution as completed AFTER API calls
+                        message_handler.update_stage(f"Executing level {level_index+1}: {len(level_functions)} functions", completed=True)
+                        await message_handler.send_thinking_message_with_stop(initial=False)
+                        
+                        # Display function execution results in code block - simplified to show function names with check marks
+                        execution_output = "```\n"
+                        for func_name, result in level_results.items():
+                            success = "✓" if result.get("error") is None else "✗"
+                            execution_output += f"{success} {func_name}\n"
+                        execution_output += "```"
+                        
+                        response = await asyncio.to_thread(
+                            self.slack_client.chat_postMessage,
+                            channel=ai_request.channel_id,
+                            thread_ts=effective_thread_ts,
+                            text=f"Soldier execute: {execution_output}"
+                        )
+                        # Track message ID for later deletion
+                        message_handler.progress_message_ids.append(response['ts'])
+                        
+                    except Exception as e:
+                        logger.error(f"Error executing level {level_index+1}: {str(e)}")
+                        all_functions_executed = False
+                        # If a level fails, we should consider replanning
+                        should_replan = True
+                        break
                     
-                    # Use previous results as context for subsequent functions
-                    result = await self.soldier.execute(
-                        plan=plan,
-                        function_name=function_name,
-                        user_query=order,
-                        previous_results=execution_results 
-                    )
-                    
-                    # Add result to execution results
-                    execution_results[function_name] = result
-                    context_manager.add_context(context['context_id'], 'execution_results', execution_results)
-                    
-                    message_handler.update_stage(f"Executing {function_name}", completed=True)
-                    await message_handler.send_thinking_message_with_stop(initial=False)
+                    # Check for stop request after executing level
+                    if context_manager.get_context(context['context_id']).get('stop_requested', False):
+                        logger.info(f"Stop requested after executing level {level_index+1}")
+                        all_functions_executed = False
+                        break
                 
-                # Check if a stop was requested after function execution
-                if context_manager.get_context(context['context_id']).get('stop_requested', False):
-                    logger.info(f"Stop requested after function execution for context {context['context_id']}")
+                # 4. Captain evaluation - only if all functions were executed or we need to replan
+                if all_functions_executed or should_replan:
+                    # Update stage BEFORE Captain evaluation API call
+                    message_handler.update_stage("Captain evaluating results")
+                    await message_handler.send_thinking_message_with_stop(initial=False)
+                    
+                    # Make the Captain API call for evaluation
+                    evaluation = self.captain.evaluate(order, current_plan, execution_results)
+                    
+                    # Mark Captain evaluation as completed AFTER API call
+                    message_handler.update_stage("Captain evaluating results", completed=True)
+                    
+                    logger.info(f"Captain evaluation: change_plan={evaluation.get('change_plan', False)}, response_ready={evaluation.get('response_ready', False)}")
+                    
+                    # Decision based on evaluation
+                    if evaluation.get('response_ready', True):
+                        # We have enough information to generate a response
+                        logger.info("Captain indicates we have enough information to respond")
+                        break
+                        
+                    elif evaluation.get('change_plan', False):
+                        # We need to revise the plan
+                        logger.info(f"Captain indicates we need to change the plan: {evaluation.get('error_description', 'No error description provided')}")
+                        
+                        # Enrich the order with error description for next planning iteration
+                        error_desc = evaluation.get('error_description', 'Plan requires revision')
+                        current_order = f"{order}\n\nPrevious plan had issues: {error_desc}"
+                        
+                        # Set flag to replan in the next iteration
+                        should_replan = True
+                        continue
+                        
+                    else:
+                        # All functions executed but we don't have enough information
+                        logger.info("Captain indicates we need more information but current plan is exhausted")
+                        # We'll exit the loop and generate a response with what we have
+                        break
+                
+                # If we get here without replanning set, it means we should exit the loop
+                if not should_replan:
                     break
-                
-                # 4. Captain evaluation
-                message_handler.update_stage("Captain evaluating results")
-                await message_handler.send_thinking_message_with_stop(initial=False)
-                
-                evaluation = self.captain.evaluate(order, plan, execution_results)
-                logger.info(f"Captain evaluation: change_plan={evaluation.get('change_plan', False)}, execution_complete={evaluation.get('execution_complete', False)}, response_ready={evaluation.get('response_ready', False)}")
-                
-                message_handler.update_stage("Captain evaluating results", completed=True)
-                
-                # Determine if we should continue execution
-                if evaluation.get('response_ready', False):
-                    # We have enough information to respond
-                    execution_continues = False
-                elif evaluation.get('change_plan', False):
-                    # Need to completely restart planning
-                    # Reset the plan but maintain execution results
-                    context_manager.add_context(context['context_id'], 'current_plan', {})
-                elif not evaluation.get('execution_complete', False):
-                    # More functions need to be executed in the current plan
-                    execution_continues = True
-                else:
-                    # All functions executed but not enough information
-                    execution_continues = False
-                
-                # If the loop will continue, show a message to the user
-                if execution_continues and iteration < max_iterations:
-                    # Send a message letting the user know we're continuing to process
-                    await asyncio.to_thread(
-                        self.slack_client.chat_postMessage,
-                        channel=ai_request.channel_id,
-                        thread_ts=effective_thread_ts,
-                        text=f"🔄 *Still working on your request...* (iteration {iteration})\n\nI need to gather more information to fully answer your question. Click the *Stop Processing* button above if you want to interrupt me."
-                    )
             
             # Check if we stopped due to user request
             if context_manager.get_context(context['context_id']).get('stop_requested', False):
+                message_handler.update_stage("Processing stopped by user")
+                
                 # If we have any results so far, generate a partial response
                 if execution_results:
-                    message_handler.update_stage("Generating partial response")
-                    await message_handler.send_thinking_message(initial=False)
-                    
                     partial_response = self.commander.response(
                         order=order,
-                        execution_results=context_manager.get_context(context['context_id']).get('execution_results', {})
+                        execution_results=execution_results
                     )
                     
+                    # Add note about interruption
+                    final_response = f"*Note: Processing was interrupted at your request. Here's what I found so far:*\n\n{partial_response}"
+                    
                     # Send partial response and delete thinking message
-                    await self._send_response(partial_response, ai_request, effective_thread_ts)
-                    await message_handler.delete_thinking_message()
+                    await self._send_response(final_response, ai_request, effective_thread_ts)
+                    # Delete all progress messages instead of just the thinking message
+                    await message_handler.delete_all_progress_messages()
                     
                     # Add to conversation history
                     await conversation_manager.add_message("user", ai_request.text, ai_request.message_ts)
-                    await conversation_manager.add_message("assistant", partial_response)
+                    await conversation_manager.add_message("assistant", final_response)
+                else:
+                    await message_handler.delete_all_progress_messages()
+                
+                # Log token and API call usage if in debug mode
+                if logger.isEnabledFor(logging.DEBUG):
+                    for agent in [self.commander, self.captain, self.soldier]:
+                        agent.client.log_token_usage(logging.DEBUG)
+                    
+                    # Log API call report
+                    log_api_call_report(logging.DEBUG)
                 
                 return
             
-            # 5. Generate final response from Commander
+            # 5. Update stage BEFORE Commander response API call
             message_handler.update_stage("Commander generating response")
             await message_handler.send_thinking_message(initial=False)
             
+            # Make the Commander API call for the final response
             final_response = self.commander.response(
                 order=order,
-                execution_results=context_manager.get_context(context['context_id']).get('execution_results', {})
+                execution_results=execution_results
             )
             
+            # Mark Commander response as completed AFTER API call
             message_handler.update_stage("Commander generating response", completed=True)
             
             # 6. Send final message and delete thinking message
             await self._send_response(final_response, ai_request, effective_thread_ts)
-            await message_handler.delete_thinking_message()
+            # Delete all progress messages instead of just the thinking message
+            await message_handler.delete_all_progress_messages()
             
             # 7. Add to conversation history
             await conversation_manager.add_message("user", ai_request.text, ai_request.message_ts)
@@ -869,11 +1107,33 @@ class TMAISlackAgent:
             
             # Log execution time
             elapsed_time = time.time() - start_time
-            logger.info(f"Processed message in {elapsed_time:.2f} seconds")
+            logger.info(f"Processed message in {elapsed_time:.2f} seconds with {iteration} iterations")
+            
+            # Log token and API call usage if in debug mode
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.info("Generating usage reports")
+                for agent in [self.commander, self.captain, self.soldier]:
+                    logger.debug(f"Token usage for {agent.__class__.__name__} ({agent.model}):")
+                    agent.client.log_token_usage(logging.DEBUG)
+                
+                # Log API call report
+                logger.debug("API call report:")
+                log_api_call_report(logging.DEBUG)
             
         except Exception as e:
             logger.error(f"Error processing message: {str(e)}")
             await message_handler.send_error_message(str(e))
+            
+            # Log token and API call usage on error if in debug mode
+            if logger.isEnabledFor(logging.DEBUG):
+                try:
+                    for agent in [self.commander, self.captain, self.soldier]:
+                        agent.client.log_token_usage(logging.DEBUG)
+                    
+                    # Log API call report
+                    log_api_call_report(logging.DEBUG)
+                except Exception as log_error:
+                    logger.error(f"Error generating usage reports: {str(log_error)}")
     
     async def _send_response(self, response: str, ai_request: AIRequest, thread_ts: str):
         """Send the response to Slack."""

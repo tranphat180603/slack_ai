@@ -66,7 +66,7 @@ linear_tools:
           - team_key
 
       - name: getAllCycles
-        description: GraphQL-based function to get all cycles in a specified Linear team
+        description: GraphQL-based function to get all cycles up to the current cycle in a specified Linear team. The largest cycle number is the current cycle and the rest are past cycles in chronological order.
         inputs:
           team_key: "The team key to get cycles from (enum: ENG, OPS, RES, AI, MKT, PRO)"
         outputs: "Array of cycle objects with metadata"
@@ -101,8 +101,8 @@ linear_tools:
           assignee_contains: "Filter by assignee names containing this text (case-insensitive)"
           title_contains: "Filter issues where title contains this string"
           description_contains: "Filter issues where description contains this string"
-          cycle_name: "Filter by cycle name"
-          project_name: "Filter by project name"
+          cycle_number: "Filter by cycle number (numeric identifier)"
+          project_id: "Filter by project ID"
           label_name: "Filter by label name"
           first: "Limit the number of issues returned"
         outputs: "Array of matching issues with metadata"
@@ -114,8 +114,7 @@ linear_tools:
         inputs:
           issue_number: "Filter comments by issue number"
           user_display_name: "Filter comments by user display name"
-          contains: "Filter comments containing this text (case-sensitive)"
-          contains_ignore_case: "Filter comments containing this text (case-insensitive)"
+          body_contains: "Filter comments where body contains this text"
         outputs: "Array of matching comments"
         required_inputs:
           - issue_number
@@ -136,7 +135,6 @@ linear_tools:
           team_key: "Filter projects by team key (enum: ENG, OPS, RES, AI, MKT, PRO)"
           name: "Exact match for project name"
           name_contains: "Filter projects where name contains this string (case-sensitive)"
-          name_contains_ignore_case: "Filter projects where name contains this string (case-insensitive)"
           state: "Filter by project state (e.g. 'planned', 'started', 'completed')"
           lead_display_name: "Filter by project lead's display name"
         outputs: "Array of matching project objects"
@@ -146,9 +144,10 @@ linear_tools:
         description: GraphQL-based function to filter cycles in Linear based on various criteria
         inputs:
           team_key: "Filter cycles by team key (enum: ENG, OPS, RES, AI, MKT, PRO)"
-          name: "Exact match for cycle name"
-          name_contains: "Filter cycles where name contains this string"
-          is_active: "Filter for active/inactive cycles"
+          number: "Filter by cycle number (numeric identifier)"
+          starts_at: "Filter by cycle start date (format: YYYY-MM-DD)"
+          ends_at: "Filter by cycle end date (format: YYYY-MM-DD)"
+          filter_by_start_date: "Whether to only include cycles that have started"
         outputs: "Array of matching cycle objects"
         required_inputs: []
 
@@ -163,9 +162,8 @@ linear_tools:
           - body
 
       - name: semantic_search_linear
-        description: Find Linear content (by loosely matching the content of issues, projects, comments) semantically similar to a natural language query. Returns results with metadata that can be used for further filtering with other Linear functions. Used when the query mentions about a name or description of issues, projects, comments, etc
+        description: "IMPORTANT: Only use this for natural language concept searches (e.g., 'database migration issues' or 'UI improvements'). DO NOT use for finding specific issues by ID, number, or exact name - use filterIssues instead. This function finds Linear content semantically similar to concepts described in natural language, searching across titles and descriptions of issues, projects, and comments."
         inputs:
-          query: "Natural language query to search for"
           limit: "Maximum number of results to return"
           use_reranker: "Whether to apply LLM-based reranking to improve search results"
           candidate_pool_size: "Size of the initial candidate pool for reranking"

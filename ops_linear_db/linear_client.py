@@ -15,6 +15,10 @@ dotenv.load_dotenv()
 
 logger = logging.getLogger("linear_client")
 
+# Disable the noisy gql.transport.requests logger
+gql_logger = logging.getLogger("gql.transport.requests")
+gql_logger.setLevel(logging.WARNING)
+
 from gql import gql, Client
 from gql.transport.requests import RequestsHTTPTransport
 
@@ -89,54 +93,45 @@ class LinearClient:
             raise LinearError(f"Unexpected error: {str(e)}")
         
     def getCurrentUser(self, slack_display_name: str) -> dict:
-        """
-        Get information about a specific user by their Slack display name.
-        
-        Args:
-            slack_display_name: The Slack display name of the user to look up (e.g. '@username')
-            
-        Returns:
-            Dictionary containing user information or None if not found
-        """
         users_info = {
-            '@Talha': {'real_name': 'Talha Ahmad', 'title': 'Operations Manager', 'team': 'MKT'},
-            '@Val': {'real_name': 'Valentine Enedah', 'title': 'CX', 'team': 'PRO'},
-            '@Ian Balina': {'real_name': 'Ian Balina', 'title': 'Founder and CEO', 'team': None},
-            '@Harsh': {'real_name': 'Harsh', 'title': 'Senior Full Stack Engineer', 'team': 'ENG'},
-            '@Andrew Tran': {'real_name': 'Andrew Tran', 'title': 'Data Engineer', 'team': 'AI'},
-            '@Ayush Jalan': {'real_name': 'Ayush Jalan', 'title': 'Blockchain Engineer', 'team': 'ENG'},
-            '@Drich': {'real_name': 'Raldrich Oracion', 'title': 'Customer Success', 'team': 'PRO'},
-            '@Bartosz': {'real_name': 'Bartosz Kusnierczak', 'title': 'Senior Full Stack Engineer', 'team': 'ENG'},
-            '@Jake': {'real_name': 'Jake Nguyen', 'title': 'Senior Data Engineer', 'team': 'AI'},
-            '@Roshan Ganesh': {'real_name': 'Roshan Ganesh', 'title': 'Marketing Lead', 'team': 'MKT'},
-            '@Sam Monac': {'real_name': 'Sam Monac', 'title': 'Chief Product Officer', 'team': None},
-            '@Favour': {'real_name': 'Favour Ikwan', 'title': 'Chief Operations Officer', 'team': 'OPS'},
-            '@Suleman Tariq': {'real_name': 'Suleman Tariq', 'title': 'Tech Lead', 'team': 'ENG'},
-            '@Zaiying Li': {'real_name': 'Zaiying Li', 'title': '', 'team': 'OPS'},
-            '@Hemank': {'real_name': 'Hemank', 'title': '', 'team': 'RES'},
-            '@Ben': {'real_name': 'Ben Diagi', 'title': 'Product Manager', 'team': 'PRO'},
-            '@Chao': {'real_name': 'Chao Li', 'title': 'Quantitative Analyst', 'team': 'AI'},
-            '@Abdullah': {'real_name': 'Abdullah', 'title': 'Head Of Investment', 'team': 'RES'},
-            '@Manav': {'real_name': 'Manav Garg', 'title': 'Blockchain Engineer', 'team': 'RES'},
-            '@Vasilis': {'real_name': 'Vasilis Kotopoulos', 'title': 'AI Team Lead', 'team': 'AI'},
-            '@Olaitan Akintunde': {'real_name': 'Olaitan Akintunde', 'title': 'Video Editor and Motion Designer', 'team': 'MKT'},
-            '@Chetan Kale': {'real_name': 'Chetan Kale', 'title': '', 'team': 'RES'},
-            '@ayo': {'real_name': 'ayo', 'title': '', 'team': 'PRO'},
-            '@Özcan İlhan': {'real_name': 'Özcan İlhan', 'title': '', 'team': 'ENG'},
-            '@Faith Oladejo': {'real_name': 'Faith Oladejo', 'title': '', 'team': 'PRO'},
-            '@Taf': {'real_name': 'Tafcir Majumder', 'title': 'Head Of Business Development', 'team': 'MKT'},
-            '@Caleb N': {'real_name': 'Caleb', 'title': '', 'team': 'MKT'},
-            '@divine': {'real_name': 'Divine Anthony', 'title': 'Devops', 'team': 'ENG'},
-            '@Williams': {'real_name': 'Williams Williams', 'title': 'Senior Fullstack Engineer', 'team': 'ENG'},
-            '@Anki Truong': {'real_name': 'Truong An (Anki)', 'title': '', 'team': 'ENG'},
-            '@Ryan': {'real_name': 'Ryan Barcelona', 'title': 'Freelancer', 'team': 'MKT'},
-            '@Phat': {'real_name': 'Ngoc Phat', 'title': '', 'team': 'OPS'},
-            '@AhmedHamdy': {'real_name': 'AhmedHamdy', 'title': 'Senior Data Scientist/ML Engineer', 'team': 'AI'},
-            '@Grady': {'real_name': 'Grady', 'title': 'Data Scientist/AI Engineer', 'team': 'AI'},
-            '@Khadijah': {'real_name': 'Khadijah Shogbuyi', 'title': '', 'team': 'OPS'},
-            '@Talha Cagri': {'real_name': 'Talha Cagri Kotcioglu', 'title': 'Quantitative Analyst', 'team': 'AI'},
-            '@Agustín Gamoneda': {'real_name': 'Agustín Gamoneda', 'title': '', 'team': 'MKT'},
-            '@Peterson': {'real_name': 'Peterson Nwoko', 'title': 'Sr DevOps/SRE Engineer', 'team': 'ENG'}
+            '@Talha': {'linear_display_name': 'talha', 'team': 'MKT'},
+            '@Val': {'linear_display_name': 'val', 'team': 'PRO'},
+            '@Ian Balina': {'linear_display_name': 'ian', 'team': None},
+            '@Harsh': {'linear_display_name': 'harshg', 'team': 'ENG'},
+            '@Andrew Tran': {'linear_display_name': 'andrew', 'team': 'AI'},
+            '@Ayush Jalan': {'linear_display_name': 'ayush', 'team': 'ENG'},
+            '@Drich': {'linear_display_name': 'raldrich', 'team': 'PRO'},
+            '@Bartosz': {'linear_display_name': 'bartosz', 'team': 'ENG'},
+            '@Jake': {'linear_display_name': 'jake', 'team': 'AI'},
+            '@Roshan Ganesh': {'linear_display_name': 'roshan1', 'team': 'MKT'},
+            '@Sam Monac': {'linear_display_name': 'sam', 'team': None},
+            '@Favour': {'linear_display_name': 'favour', 'team': 'OPS'},
+            '@Suleman Tariq': {'linear_display_name': 'suleman', 'team': 'ENG'},
+            '@Zaiying Li': {'linear_display_name': 'zaiying', 'team': 'OPS'},
+            '@Hemank': {'linear_display_name': 'hemank', 'team': 'RES'},
+            '@Ben': {'linear_display_name': 'ben', 'team': 'PRO'},
+            '@Chao': {'linear_display_name': 'chao', 'team': 'AI'},
+            '@Abdullah': {'linear_display_name': 'abdullah', 'team': 'RES'},
+            '@Manav': {'linear_display_name': 'manav', 'team': 'RES'},
+            '@Vasilis': {'linear_display_name': 'vasilis', 'team': 'AI'},
+            '@Olaitan Akintunde': {'linear_display_name': 'olaitan', 'team': 'MKT'},
+            '@Chetan Kale': {'linear_display_name': 'chetan', 'team': 'RES'},
+            '@ayo': {'linear_display_name': 'ayo', 'team': 'PRO'},
+            '@Özcan İlhan': {'linear_display_name': 'ozcan', 'team': 'ENG'},
+            '@Faith Oladejo': {'linear_display_name': 'faith', 'team': 'PRO'},
+            '@Taf': {'linear_display_name': 'tafcirm', 'team': 'MKT'},
+            '@Caleb N': {'linear_display_name': 'caleb', 'team': 'MKT'},
+            '@divine': {'linear_display_name': 'divine', 'team': 'ENG'},
+            '@Williams': {'linear_display_name': 'williams', 'team': 'ENG'},
+            '@Anki Truong': {'linear_display_name': 'ankit', 'team': 'ENG'},
+            '@Ryan': {'linear_display_name': 'ryan', 'team': 'MKT'},
+            '@Phat': {'linear_display_name': 'phat', 'team': 'OPS'},
+            '@AhmedHamdy': {'linear_display_name': 'ahmedhamdy', 'team': 'AI'},
+            '@Grady': {'linear_display_name': 'grady', 'team': 'AI'},
+            '@Khadijah': {'linear_display_name': 'khadijah', 'team': 'OPS'},
+            '@Talha Cagri': {'linear_display_name': 'talhacagri', 'team': 'AI'},
+            '@Agustín Gamoneda': {'linear_display_name': 'agustin', 'team': 'MKT'},
+            '@Peterson': {'linear_display_name': 'peterson', 'team': 'ENG'}
         }
         return users_info.get(slack_display_name, None)
 
@@ -234,16 +229,6 @@ class LinearClient:
                   color
                 }
               }
-              comments {
-                nodes {
-                  id
-                  body
-                  user {
-                    id
-                    displayName
-                  }
-                }
-              }
               parent {
                 id
                 number
@@ -314,7 +299,7 @@ class LinearClient:
             return teams[0].get("projects", {}).get("nodes", [])
         return []
     
-    def getAllCycles(self, teamKey: str, filter_by_start_date: bool = True):
+    def getAllCycles(self, teamKey: str, filter_by_start_date: bool = True, limit: int = 10):
         """
         Retrieve all cycles for a given team.
         
@@ -332,8 +317,8 @@ class LinearClient:
             filter_obj["startsAt"] = {"lte": today_date}
         
         query = gql("""
-        query ($filter: CycleFilter) {
-          cycles(filter: $filter) {
+        query ($filter: CycleFilter, $first: Int) {
+          cycles(filter: $filter, first: $first) {
             nodes {
               id
               number
@@ -347,8 +332,10 @@ class LinearClient:
           }
         }
         """)
-        
         variables = {"filter": filter_obj}
+        if limit is not None:
+            variables["first"] = limit
+            
         result = self._execute_query(query, variables)
         return result.get("cycles", {}).get("nodes", [])
     
@@ -457,16 +444,6 @@ class LinearClient:
                   id
                   name
                   color
-                }
-              }
-              comments {
-                nodes {
-                  id
-                  body
-                  user {
-                    id
-                    displayName
-                  }
                 }
               }
               parent {
@@ -579,12 +556,6 @@ class LinearClient:
               number
               startsAt
               endsAt
-              issues {
-                nodes {
-                  id
-                  title
-                }
-              }
               team {
                 id
                 key
@@ -622,30 +593,46 @@ class LinearClient:
         return result.get("comments", {}).get("nodes", [])
     
     def filterAttachments(self, criteria: dict):
-        """Retrieve all attachments for a specific issue."""
+        """Retrieve all attachments, then filter locally for a specific issue if needed."""
         query = gql("""
-        query ($filter: AttachmentFilter) {
-          attachments(filter: $filter) {
+        query {
+          attachments(first: 100) {
             nodes {
+              id
+              title
+              url
+              creator {
                 id
-                title
-                url
-                creator {
-                  id
-                  displayName
-                }
-                issue {
-                  id
-                  number
-                }
+                displayName
+              }
+              issue {
+                id
+                number
               }
             }
           }
         }
         """)
-        variables = {"filter": criteria}
-        result = self._execute_query(query, variables)
-        return result.get("attachments", {}).get("nodes", [])
+        
+        result = self._execute_query(query, {})
+        attachments = result.get("attachments", {}).get("nodes", [])
+        
+        # If there's an issue_number criteria in the original parameters, filter locally
+        if 'issue_number' in criteria:
+            issue_number = criteria.get('issue_number')
+            attachments = [a for a in attachments if a.get('issue') and a.get('issue').get('number') == issue_number]
+            
+        # Filter by title if specified
+        if 'title' in criteria and 'contains' in criteria['title']:
+            title_filter = criteria['title']['contains'].lower()
+            attachments = [a for a in attachments if title_filter in a.get('title', '').lower()]
+            
+        # Filter by creator if specified
+        if 'creator' in criteria and 'displayName' in criteria['creator'] and 'eq' in criteria['creator']['displayName']:
+            creator_filter = criteria['creator']['displayName']['eq']
+            attachments = [a for a in attachments if a.get('creator') and a.get('creator').get('displayName') == creator_filter]
+            
+        return attachments
     
     # ---------------------------
     # Action Functions

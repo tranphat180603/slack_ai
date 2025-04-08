@@ -3,6 +3,7 @@ import json
 import logging
 import dotenv
 import yaml
+import time
 from typing import Dict, List, Any, Optional, Union
 
 from llm.openai_client import OpenaiClient
@@ -17,6 +18,106 @@ else:
     logger.setLevel(logging.INFO)
 
 dotenv.load_dotenv()
+
+class APICallTracker:
+    """Tracks API calls made by agent components."""
+    
+    def __init__(self):
+        self.reset()
+    
+    def reset(self):
+        """Reset API call statistics."""
+        self.component_calls = {}
+        self.function_calls = {}
+        self.start_time = time.time()
+    
+    def track_call(self, component_name: str, function_name: str, execution_time: float = None):
+        """Track an API call."""
+        # Track by component
+        if component_name not in self.component_calls:
+            self.component_calls[component_name] = {
+                "total_calls": 0,
+                "functions": {}
+            }
+        
+        # Increment total calls for this component
+        self.component_calls[component_name]["total_calls"] += 1
+        
+        # Track function within component
+        if function_name not in self.component_calls[component_name]["functions"]:
+            self.component_calls[component_name]["functions"][function_name] = {
+                "calls": 0,
+                "total_execution_time": 0
+            }
+        
+        self.component_calls[component_name]["functions"][function_name]["calls"] += 1
+        
+        # Add execution time if provided
+        if execution_time is not None:
+            self.component_calls[component_name]["functions"][function_name]["total_execution_time"] += execution_time
+        
+        # Track by function across components
+        if function_name not in self.function_calls:
+            self.function_calls[function_name] = {
+                "total_calls": 0,
+                "components": {},
+                "total_execution_time": 0
+            }
+        
+        # Increment total calls for this function
+        self.function_calls[function_name]["total_calls"] += 1
+        
+        # Track component within function
+        if component_name not in self.function_calls[function_name]["components"]:
+            self.function_calls[function_name]["components"][component_name] = 0
+        
+        self.function_calls[function_name]["components"][component_name] += 1
+        
+        # Add execution time if provided
+        if execution_time is not None:
+            self.function_calls[function_name]["total_execution_time"] += execution_time
+    
+    def get_report(self) -> Dict[str, Any]:
+        """Generate a report of API calls."""
+        total_runtime = time.time() - self.start_time
+        
+        # Count total calls across all components
+        total_calls = sum(comp["total_calls"] for comp in self.component_calls.values())
+        
+        return {
+            "total_runtime_seconds": total_runtime,
+            "total_calls": total_calls,
+            "components": self.component_calls,
+            "functions": self.function_calls
+        }
+    
+    def log_report(self, log_level=logging.DEBUG):
+        """Log API call report at the specified level."""
+        report = self.get_report()
+        
+        if logger.isEnabledFor(log_level):
+            logger.log(log_level, "===== API CALL REPORT =====")
+            logger.log(log_level, f"Total runtime: {report['total_runtime_seconds']:.2f} seconds")
+            logger.log(log_level, f"Total API calls: {report['total_calls']}")
+            
+            logger.log(log_level, "\nCalls by component:")
+            for component, data in report['components'].items():
+                logger.log(log_level, f"  {component}: {data['total_calls']} calls")
+                for function, func_data in data['functions'].items():
+                    avg_time = func_data['total_execution_time'] / func_data['calls'] if func_data['calls'] > 0 else 0
+                    logger.log(log_level, f"    - {function}: {func_data['calls']} calls, avg time: {avg_time:.4f}s")
+            
+            logger.log(log_level, "\nCalls by function:")
+            for function, data in report['functions'].items():
+                avg_time = data['total_execution_time'] / data['total_calls'] if data['total_calls'] > 0 else 0
+                logger.log(log_level, f"  {function}: {data['total_calls']} calls, avg time: {avg_time:.4f}s")
+                logger.log(log_level, f"    Used by: {', '.join(data['components'].keys())}")
+            
+            logger.log(log_level, "============================")
+
+
+# Create a global API call tracker instance
+api_call_tracker = APICallTracker()
 
 class Commander:
     def __init__(self, model: str, prompts: Dict = None):
@@ -84,6 +185,8 @@ class Commander:
         """Assign tasks between different platforms based on user query"""
         logger.debug(f"[Commander] assign_tasks called with query: {user_query}")
         
+        start_time = time.time()
+        
         # Format history for prompt
         history_text = ""
         if history:
@@ -136,6 +239,12 @@ class Commander:
                 system_prompt=formatted["system"]
             )
         
+        # Calculate execution time
+        execution_time = time.time() - start_time
+        
+        # Track API call
+        api_call_tracker.track_call("Commander", "assign_tasks", execution_time)
+        
         # Log the response from the API
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"[Commander] API response for assign_tasks: {json.dumps(json.loads(response), indent=2, ensure_ascii=False)}")
@@ -155,6 +264,8 @@ class Commander:
     def response(self, order: str, execution_results: Dict[str, Any]) -> str:
         """Generate a response based on execution results"""
         logger.debug(f"[Commander] response generation called with order: {order}")
+
+        start_time = time.time()
         
         # Prepare prompt variables
         prompt_vars = {
@@ -165,38 +276,25 @@ class Commander:
         # Format the prompt using template
         formatted = self.format_prompt("commander.response", prompt_vars)
         
-        # Get response from LLM based on model type
-        if self.model.startswith("gpt"):
-            # Log the final prompt sent to the API
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"[Commander] Sending prompt to API for response:\nSystem: {formatted['system']}\nUser: {formatted['user']}")
-            
-            response = self.client.response(
-                prompt=formatted["user"], 
-                system_prompt=formatted["system"]
-            )
-        elif self.model.startswith("o"):
-            # For response_reasoning, combine system_template and user_template
-            combined_prompt = formatted["system"] + "\n\n" + formatted["user"]
-            
-            # Log the final prompt sent to the API
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"[Commander] Sending prompt to API for response:\n{combined_prompt}")
-            
-            response = self.client.response_reasoning(
-                prompt=combined_prompt,
-                reasoning_effort="low"
-            )
-        else:
-            # Default to response method
-            # Log the final prompt sent to the API
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"[Commander] Sending prompt to API for response:\nSystem: {formatted['system']}\nUser: {formatted['user']}")
-            
-            response = self.client.response(
-                prompt=formatted["user"], 
-                system_prompt=formatted["system"]
-            )
+        # Create a new OpenaiClient with gpt-4o-mini model specifically for this response
+        from llm.openai_client import OpenaiClient
+        gpt4o_mini_client = OpenaiClient(os.getenv("OPENAI_API_KEY"), model="gpt-4o-mini")
+        
+        # Log the final prompt sent to the API
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"[Commander] Sending prompt to API for response using gpt-4o-mini:\nSystem: {formatted['system']}\nUser: {formatted['user']}")
+        
+        # Always use the response function with the new client
+        response = gpt4o_mini_client.response(
+            prompt=formatted["user"], 
+            system_prompt=formatted["system"]
+        )
+        
+        # Calculate execution time
+        execution_time = time.time() - start_time
+        
+        # Track API call
+        api_call_tracker.track_call("Commander", "response", execution_time)
         
         # Log the response from the API
         if logger.isEnabledFor(logging.DEBUG):
@@ -262,8 +360,11 @@ class Captain:
             "user": formatted_user
         }
 
-    def plan(self, order: str, platforms: List[str]) -> Dict[str, Any]:
+    def plan(self, order: str, platforms: List[str], previous_results: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Create a plan based on available tools and user order"""
+        logger.debug(f"[Captain] plan called with order: {order}")
+        
+        start_time = time.time()
         
         # Get tools for the specific platforms
         tools_text = self._get_tools_for_platforms(platforms)
@@ -277,6 +378,10 @@ class Captain:
         prompt_vars = {
             "order": order
         }
+        
+        # Include previous results if available
+        if previous_results:
+            prompt_vars["previous_results"] = json.dumps(previous_results, indent=2)
         
         # Add tools using the appropriate variable name based on platform
         if platform == "linear":
@@ -307,6 +412,12 @@ class Captain:
             reasoning_effort="medium"
         )
         
+        # Calculate execution time
+        execution_time = time.time() - start_time
+        
+        # Track API call
+        api_call_tracker.track_call("Captain", "plan", execution_time)
+        
         # Log the response from the API
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"[Captain] API response for plan: {json.dumps(json.loads(response), indent=2, ensure_ascii=False)}")
@@ -314,40 +425,80 @@ class Captain:
         # Parse JSON response
         try:
             result = json.loads(response)
+            
+            # Ensure the plan has the expected structure
+            if "function_levels" not in result:
+                logger.warning("Plan response missing 'function_levels', adding empty levels")
+                result["function_levels"] = []
+                
+            # For backward compatibility, convert old format to new if needed
+            if "functions" in result and "function_levels" not in result:
+                logger.warning("Converting legacy functions format to function_levels")
+                function_levels = []
+                
+                # Add ready_to_execute functions as level 1
+                if "ready_to_execute" in result["functions"]:
+                    ready = result["functions"]["ready_to_execute"]
+                    if ready:
+                        function_levels.append(ready)
+                
+                # Add not_ready_to_execute functions as level 2+
+                if "not_ready_to_execute" in result["functions"]:
+                    not_ready = result["functions"]["not_ready_to_execute"]
+                    if not_ready:
+                        # Extract just the function names if they're in dict format
+                        not_ready_names = []
+                        for item in not_ready:
+                            if isinstance(item, dict) and "name" in item:
+                                not_ready_names.append(item["name"])
+                            elif isinstance(item, str):
+                                not_ready_names.append(item)
+                        
+                        if not_ready_names:
+                            function_levels.append(not_ready_names)
+                
+                # Replace the functions with function_levels
+                result["function_levels"] = function_levels
+                del result["functions"]
+            
             return result
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON from Captain plan: {e}")
             # Fallback to empty plan
             return {
                 "plan_description": "Failed to create a plan",
-                "functions": {
-                    "ready_to_execute": [],
-                    "not_ready_to_execute": []
-                }
+                "function_levels": []
             }
     
     def evaluate(self, order: str, plan: Dict[str, Any], execution_results: Dict[str, Any]) -> Dict[str, Any]:
         """Evaluate execution results and determine if plan should continue"""
+        logger.debug(f"[Captain] evaluate called with order: {order}")
+        
+        start_time = time.time()
         
         # Determine the platform from the plan
         # Extract the platform from the first executed function, or default to 'linear'
         platform = 'linear'  # Default platform
-        if plan and 'functions' in plan and 'ready_to_execute' in plan['functions'] and plan['functions']['ready_to_execute']:
-            first_function = plan['functions']['ready_to_execute'][0]
-            if first_function in LINEAR_SCHEMAS:
-                platform = 'linear'
-            elif first_function in SLACK_SCHEMAS:
-                platform = 'slack'
-            # Add more platform detections as needed
+        
+        # Try to determine platform from function_levels
+        if plan and 'function_levels' in plan and plan['function_levels']:
+            for level in plan['function_levels']:
+                if level:  # If there's at least one function in this level
+                    first_function = level[0]
+                    if first_function in LINEAR_SCHEMAS:
+                        platform = 'linear'
+                        break
+                    elif first_function in SLACK_SCHEMAS:
+                        platform = 'slack'
+                        break
+                    # Add more platform detections as needed
         
         # Use the same platform-based prompt naming as in the plan method
         prompt_name = f"{platform}.captain.evaluate"
         logger.debug(f"[Captain] Using prompt name: {prompt_name}")
         
-        order = "This is the order for TMAI Agent to execute: " + order
-        plan = "This is the current plan for TMAI Agent to follow: " + plan
-        execution_results = "This is the results of the tools that have been executed so far: " + execution_results
-        # Prepare prompt variables
+        # Prepare prompt variables - these should remain as their original types
+        # to be properly JSON serialized in format_prompt
         prompt_vars = {
             "order": order,
             "plan": plan,
@@ -370,6 +521,12 @@ class Captain:
             reasoning_effort="medium"
         )
         
+        # Calculate execution time
+        execution_time = time.time() - start_time
+        
+        # Track API call
+        api_call_tracker.track_call("Captain", "evaluate", execution_time)
+        
         # Log the response from the API
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"[Captain] API response for evaluate: {json.dumps(json.loads(response), indent=2, ensure_ascii=False)}")
@@ -377,6 +534,20 @@ class Captain:
         # Parse JSON response
         try:
             result = json.loads(response)
+            
+            # Ensure all expected fields are present
+            if "change_plan" not in result:
+                result["change_plan"] = False
+            if "error_description" not in result:
+                result["error_description"] = None
+            if "response_ready" not in result:
+                result["response_ready"] = False
+                
+            # For backward compatibility, handle execution_complete if present but not needed
+            if "execution_complete" in result:
+                logger.warning("Ignoring deprecated 'execution_complete' field in evaluate response")
+                del result["execution_complete"]
+                
             return result
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON from Captain evaluate: {e}")
@@ -384,12 +555,13 @@ class Captain:
             return {
                 "change_plan": False,
                 "error_description": None,
-                "execution_complete": False,
                 "response_ready": False
             }
     
     def _get_tools_for_platforms(self, platforms: List[str]) -> str:
         """Get and format tools description for specified platforms"""
+        start_time = time.time()
+        
         # Ensure platforms is always a list
         if isinstance(platforms, str):
             platforms = [platforms]
@@ -434,6 +606,12 @@ class Captain:
                     
                     # Add separator between categories
                     tools_text += "-" * 50 + "\n\n"
+        
+        # Calculate execution time
+        execution_time = time.time() - start_time
+        
+        # Track API call
+        api_call_tracker.track_call("Captain", "_get_tools_for_platforms", execution_time)
         
         return tools_text or "No tools available for the specified platforms"
 
@@ -496,6 +674,8 @@ class Soldier:
         """Execute a tool with the appropriate parameters"""
         logger.debug(f"[Soldier] execute called for function: {function_name}")
         
+        start_time = time.time()
+        
         # Get the tool schema
         tool_schema = None
         platform = "unknown"
@@ -523,13 +703,10 @@ class Soldier:
                 "result": None
             }
         
-        # Prepare prompt variables
+        # Prepare prompt variables - only include what's used in the templates
         prompt_vars = {
             "plan": json.dumps(plan, indent=2),
-            "current_tool": function_name,
-            "tool_schema": json.dumps(tool_schema, indent=2),
-            "previous_results": json.dumps(previous_results or {}, indent=2),
-            "user_query": user_query
+            "previous_results": json.dumps(previous_results or {}, indent=2)
         }
         
         # Format the prompt using template
@@ -555,6 +732,12 @@ class Soldier:
             logger.debug(f"[Soldier] API response for tool call {function_name}: {json.dumps(tool_call, indent=2, ensure_ascii=False)}")
         
         if not tool_call:
+            # Calculate execution time for error case
+            execution_time = time.time() - start_time
+            
+            # Track failed API call
+            api_call_tracker.track_call("Soldier", f"execute_{function_name}_failed", execution_time)
+            
             logger.error(f"Failed to get tool call for {function_name}")
             return {
                 "function": function_name,
@@ -593,6 +776,12 @@ class Soldier:
         # Get the tool implementation
         tool_func = tool_implementations.get(function_name)
         if not tool_func:
+            # Calculate execution time for error case
+            execution_time = time.time() - start_time
+            
+            # Track failed API call
+            api_call_tracker.track_call("Soldier", f"execute_{function_name}_not_implemented", execution_time)
+            
             logger.error(f"No implementation found for function: {function_name}")
             return {
                 "function": function_name,
@@ -611,6 +800,12 @@ class Soldier:
             else:
                 result = tool_func(**params)
             
+            # Calculate execution time for successful case
+            execution_time = time.time() - start_time
+            
+            # Track successful API call
+            api_call_tracker.track_call("Soldier", f"execute_{function_name}", execution_time)
+            
             # Log the execution result (summary)
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(f"[Soldier] Execution result for {function_name}: {result}")
@@ -621,6 +816,12 @@ class Soldier:
                 "result": result
             }
         except Exception as e:
+            # Calculate execution time for error case
+            execution_time = time.time() - start_time
+            
+            # Track failed API call
+            api_call_tracker.track_call("Soldier", f"execute_{function_name}_error", execution_time)
+            
             logger.error(f"Error executing {function_name}: {str(e)}")
             return {
                 "function": function_name,
@@ -628,4 +829,19 @@ class Soldier:
                 "error": str(e),
                 "result": None
             }
-    
+
+# Function to get the API call tracker
+def get_api_call_tracker():
+    """Get the global API call tracker instance."""
+    return api_call_tracker
+
+# Function to reset the API call tracker
+def reset_api_call_tracker():
+    """Reset the global API call tracker instance."""
+    api_call_tracker.reset()
+
+# Function to log the API call report
+def log_api_call_report(log_level=logging.DEBUG):
+    """Log the API call report at the specified level."""
+    api_call_tracker.log_report(log_level)
+

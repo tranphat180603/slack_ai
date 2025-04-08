@@ -49,7 +49,7 @@ logger = logging.getLogger("slack_ai_app")
 # Set all module loggers to DEBUG level for comprehensive logging
 logging.getLogger("openai_client").setLevel(logging.INFO)
 logging.getLogger("tmai_agent").setLevel(logging.DEBUG)
-logging.getLogger("agent").setLevel(logging.DEBUG)
+logging.getLogger("agent").setLevel(logging.INFO)
 logging.getLogger("context_manager").setLevel(logging.INFO)
 logging.getLogger("slack_tools").setLevel(logging.DEBUG)
 logging.getLogger("linear_client").setLevel(logging.DEBUG)
@@ -232,6 +232,7 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
                 background_tasks.add_task(
                     agent.process_slack_message,
                     ai_request,
+                    thread_ts=thread_ts,
                     is_direct_message=True
                 )
                 
