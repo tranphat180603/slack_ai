@@ -608,7 +608,9 @@ class TMAISlackAgent:
                         user_info = self.slack_client.users_info(user=user_id)
                         if user_info["ok"]:
                             display_name = (
-                                "@" + user_info["user"]["profile"].get("display_name")
+                                user_info["user"]["profile"].get("display_name") or
+                                user_info["user"]["profile"].get("real_name") or
+                                f"<@{user_id}>"
                             )
                             self._user_cache[user_id] = display_name
                     except SlackApiError as e:
@@ -738,9 +740,6 @@ class TMAISlackAgent:
             # Initialize stop_requested flag in context
             context_manager.add_context(context['context_id'], 'stop_requested', False)
             
-            # Store the raw conversation history in the context for tool access
-            context_manager.add_context(context['context_id'], 'conversation_history', conversation_manager.history)
-            
             # Send initial thinking message only if message_ts isn't already set (from app.py)
             if not ai_request.message_ts:
                 await message_handler.send_thinking_message()
@@ -765,6 +764,7 @@ class TMAISlackAgent:
             # If history_for_commander is a list, convert it to a string
             if isinstance(history_for_commander, list):
                 history_for_commander = "\n".join(history_for_commander)
+            logger.debug(f"History for commander: {history_for_commander}")
             
             # 1. Update stage BEFORE Commander API call
             message_handler.update_stage("Commander assigning tasks")
@@ -772,7 +772,7 @@ class TMAISlackAgent:
             
             # Make the Commander API call
             commander_result = self.commander.assign_tasks(
-                user_query= "Current prompt from user: " + ai_request.sender_name + " : " + ai_request.text,
+                user_query= "Current prompt from: " + ai_request.sender_name + ":" + ai_request.text,
                 history=history_for_commander
             )
             
@@ -786,7 +786,7 @@ class TMAISlackAgent:
                 self.slack_client.chat_postMessage,
                 channel=ai_request.channel_id,
                 thread_ts=effective_thread_ts,
-                text=f"{commander_output}"
+                text=f"Commander: {commander_output}"
             )
             # Track message ID for later deletion
             message_handler.progress_message_ids.append(response['ts'])
@@ -796,25 +796,21 @@ class TMAISlackAgent:
             
             # Extract platforms and order
             platforms = commander_result.get('platform', [])
-            direct_response = commander_result.get('direct_response', '')
-            
             # Ensure platforms is always a list (Commander can return a string for a single platform)
             if isinstance(platforms, str):
                 platforms = [platforms]
                 logger.debug(f"Converted platform string '{platforms[0]}' to list")
             
-            # If direct_response is provided or no platforms, send direct response
-            if direct_response and not platforms:
-                message_handler.update_stage("I want to say...")
+            # If no platforms, send direct response
+            if not platforms or platforms == ["direct_response"]:
+                message_handler.update_stage("Direct response")
                 await message_handler.send_thinking_message(initial=False)
                 
-                # Use the direct response if provided, otherwise generate one
-                if direct_response:
-                    final_response = direct_response
-                    logger.debug("Using direct_response field from Commander")
+                # Generate direct response
+                final_response = self.commander.response(order, {})
                 
                 # Mark Direct response as completed
-                message_handler.update_stage("I want to say...", completed=True)
+                message_handler.update_stage("Direct response", completed=True)
                 
                 # Send final message and delete thinking message
                 await self._send_response(final_response, ai_request, effective_thread_ts)
@@ -839,7 +835,7 @@ class TMAISlackAgent:
             await message_handler.send_thinking_message_with_stop(initial=False)
             
             # Initialize execution variables
-            max_iterations = 3  # Prevent infinite loops
+            max_iterations = 5  # Prevent infinite loops
             iteration = 0
             current_order = order
             execution_results = {}
@@ -884,7 +880,7 @@ class TMAISlackAgent:
                         self.slack_client.chat_postMessage,
                         channel=ai_request.channel_id,
                         thread_ts=effective_thread_ts,
-                        text=f"{plan_output}"
+                        text=f"Plan: {plan_output}"
                     )
                     # Track message ID for later deletion
                     message_handler.progress_message_ids.append(response['ts'])
@@ -992,7 +988,7 @@ class TMAISlackAgent:
                             self.slack_client.chat_postMessage,
                             channel=ai_request.channel_id,
                             thread_ts=effective_thread_ts,
-                            text=f"{execution_output}"
+                            text=f"Soldier execute: {execution_output}"
                         )
                         # Track message ID for later deletion
                         message_handler.progress_message_ids.append(response['ts'])
@@ -1121,6 +1117,7 @@ class TMAISlackAgent:
                     agent.client.log_token_usage(logging.DEBUG)
                 
                 # Log API call report
+                logger.debug("API call report:")
                 log_api_call_report(logging.DEBUG)
             
         except Exception as e:
@@ -1178,7 +1175,6 @@ class TMAISlackAgent:
             channel_id = payload.get("channel", {}).get("id")
             message_ts = payload.get("message", {}).get("ts")
             user_id = payload.get("user", {}).get("id")
-            thread_ts = payload.get("container", {}).get("thread_ts") or payload.get("message", {}).get("thread_ts")
             
             # Find the context associated with this message
             context_id = None
@@ -1192,9 +1188,6 @@ class TMAISlackAgent:
                 return False
             
             logger.info(f"Stop requested by user {user_id} for context {context_id}")
-            
-            # Just mark it in the context manager
-            context_manager.add_context(context_id, "stop_requested", True)
             
             # Update the message to show that stopping was requested
             try:
@@ -1218,10 +1211,12 @@ class TMAISlackAgent:
                 await asyncio.to_thread(
                     self.slack_client.chat_postMessage,
                     channel=channel_id,
-                    thread_ts=thread_ts,
+                    thread_ts=context_manager.contexts[context_id].get("thread_ts"),
                     text="Processing stopped by user request. Feel free to ask a new question."
                 )
                 
+                # Mark this context as having a stop requested
+                context_manager.add_context(context_id, "stop_requested", True)
                 return True
                 
             except SlackApiError as e:

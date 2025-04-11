@@ -10,7 +10,65 @@ The TMAI Slack Agent uses a three-phase workflow:
 2. **Execution Phase**: Executes tools sequentially with intelligent re-planning
 3. **Response Generation Phase**: Creates a cohesive response from all gathered information
 
-![TMAI Architecture](https://i.imgur.com/example.png)
+```
++-------------------------------------------------------------------------+
+|                          TMAI SLACK AGENT                               |
++--------------------------------|--------------------------------------+
+                                 |
+                                 v
++-------------------------------------------------------------------------+
+|                            USER MESSAGE                                  |
++--------------------------------|--------------------------------------+
+                                 |
+                                 v
++-------------------------------------------------------------------------+
+|                      CONVERSATION MANAGEMENT                             |
+|                                                                          |
+|  +------------------+                     +------------------+           |
+|  | Load Context &   |<------------------>| Context Manager   |           |
+|  | History from DB  |                     +------------------+           |
+|  +------------------+                                                    |
+|                                                                          |
+|  +------------------+                                                    |
+|  | Progressive Msg  |-------------------------+                          |
+|  | Handler          |                         |                          |
+|  +------------------+                         |                          |
++--------------------------------|--------------------------------------+
+                                 |              |
+                                 |              v
+                                 |    +----------------------+
+                                 |    |   SLACK UPDATES     |
+                                 |    +----------------------+
+                                 |
+                                 v
++-------------------------------------------------------------------------+
+|                           AGENT WORKFLOW                                 |
+|                                                                          |
+|  +------------------+       +------------------+      +------------------+
+|  |    Commander     |       |     Captain      |      |     Soldier      |
+|  | (Planning Phase) |       | (Evaluation &    |      | (Tool Execution) |
+|  |                  |       |  Re-Planning)    |      |                  |
+|  |  - Determine     |------>|  - Evaluate      |<-----|  - Execute tools |
+|  |    required tools|       |    results       |      |    based on plan |
+|  |  - Create        |       |  - Decide if     |      |  - Call APIs     |
+|  |    execution plan|       |    replanning    |      |    (Linear/Slack)|
+|  +------------------+       |    is needed     |      +------------------+
+|                             +------------------+              |
+|                                     |                         |
++--------------------------------|-----------------------------+
+                                 |    |
+                                 |    |
+                                 v    v
++-------------------------------------------------------------------------+
+|                        RESPONSE GENERATION                               |
+|                                                                          |
+|  +------------------+       +------------------+      +------------------+
+|  | Process Results  |------>| Generate Final   |----->| Format & Send    |
+|  | and Context      |       | Response         |      | to Slack         |
+|  +------------------+       +------------------+      +------------------+
+|                                                                          |
++-------------------------------------------------------------------------+
+```
 
 ### Core Components
 

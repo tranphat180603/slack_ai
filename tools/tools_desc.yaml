@@ -1,5 +1,5 @@
 linear_tools:
-  - category: "ACTION: tools that enable TMAI Agent to act on behalf of employees on Linear. These must be used with caution after having gathered all the necessary information from the user."
+  - category: "ACTION: tools that enable TMAI Agent to act on behalf of employees on Linear. These must be used with caution after having gathered all the necessary information from the user's request or Linear data. Most importantly the required inputs must be clearly identified."
     tools:
       - name: createIssue
         description: GraphQL-based function to create a new issue in Linear with specified details
@@ -21,11 +21,11 @@ linear_tools:
           - title
 
       - name: updateIssue
-        description: GraphQL-based function to update an existing issue in Linear
+        description: GraphQL-based function to update an existing issue in Linear. This should only be executed after having detected which specific issue is going to be updated with the context gathered.
         inputs:
           issue_number: "The number of the issue to update"
           title: "New title for the issue"
-          description: "New markdown description"
+          description: "New markdown description for the issue"
           priority: "New priority level (0.0: None, 1.0: Urgent, 2.0: High, 3.0: Medium, 4.0: Low)"
           estimate: "New estimate points"
           assignee_name: "Display name of the user to reassign to"
@@ -41,6 +41,14 @@ linear_tools:
 
   - category: "EXPLORE: Low-effort functions that are used to explore how data on Linear looks like. You can just randomly fill in the inputs in the enum fields to see what data you can get."
     tools:
+      - name: getUserMessageByNumber
+        description: Retrieves the N most recent user messages from the current conversation thread. This is useful when you need to get the precise wording of recent messages, especially for long texts or when creating issues/tickets.
+        inputs:
+          number: "The number of most recent user messages to retrieve (e.g., 5 means retrieve the 5 most recent user messages)"
+        outputs: "List of strings containing the exact content of the requested number of user messages"
+        required_inputs:
+          - number
+
       - name: getAllUsers
         description: GraphQL-based function to get all users in a specified Linear team
         inputs:
@@ -56,14 +64,6 @@ linear_tools:
         outputs: "User object with real name and team information"
         required_inputs:
           - slack_display_name
-
-      - name: getAllProjects
-        description: GraphQL-based function to get all projects in a specified Linear team
-        inputs:
-          team_key: "The team key to get projects from (enum: ENG, OPS, RES, AI, MKT, PRO)"
-        outputs: "Array of project objects with metadata"
-        required_inputs:
-          - team_key
 
       - name: getAllCycles
         description: GraphQL-based function to get all cycles up to the current cycle in a specified Linear team. The largest cycle number is the current cycle and the rest are past cycles in chronological order.
@@ -150,16 +150,6 @@ linear_tools:
           filter_by_start_date: "Whether to only include cycles that have started"
         outputs: "Array of matching cycle objects"
         required_inputs: []
-
-      - name: createComment
-        description: GraphQL-based function to create a new comment on a Linear issue
-        inputs:
-          issue_number: "The issue number to comment on"
-          body: "The comment text (supports markdown)"
-        outputs: "Created comment object"
-        required_inputs:
-          - issue_number
-          - body
 
       - name: semantic_search_linear
         description: "IMPORTANT: Only use this for natural language concept searches (e.g., 'database migration issues' or 'UI improvements'). DO NOT use for finding specific issues by ID, number, or exact name - use filterIssues instead. This function finds Linear content semantically similar to concepts described in natural language, searching across titles and descriptions of issues, projects, and comments."

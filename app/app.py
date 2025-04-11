@@ -47,9 +47,9 @@ logging.basicConfig(
 logger = logging.getLogger("slack_ai_app")
 
 # Set all module loggers to DEBUG level for comprehensive logging
-logging.getLogger("openai_client").setLevel(logging.INFO)
+logging.getLogger("openai_client").setLevel(logging.DEBUG)
 logging.getLogger("tmai_agent").setLevel(logging.DEBUG)
-logging.getLogger("agent").setLevel(logging.INFO)
+logging.getLogger("agent").setLevel(logging.DEBUG)
 logging.getLogger("context_manager").setLevel(logging.INFO)
 logging.getLogger("slack_tools").setLevel(logging.DEBUG)
 logging.getLogger("linear_client").setLevel(logging.DEBUG)
@@ -343,13 +343,24 @@ async def slack_interactivity(request: Request, background_tasks: BackgroundTask
         payload = json.loads(payload_str)
         logger.debug(f"Received interaction payload type: {payload.get('type')}")
         
-        # Handle stop button clicks
+        # CRITICAL: Return a 200 OK immediately if this is a stop action
+        # This ensures we stay within Slack's 3-second timeout window
         if payload.get("type") == "block_actions":
-            # Process in background to avoid timeouts
-            background_tasks.add_task(
-                agent.handle_interaction_payload,
-                payload
-            )
+            actions = payload.get("actions", [])
+            if actions and actions[0].get("action_id") == "stop_processing":
+                # Process stop request in background
+                background_tasks.add_task(
+                    agent.handle_interaction_payload,
+                    payload
+                )
+                logger.info("Stop button clicked, returning immediate acknowledgment")
+                return {"response_action": "update", "text": "Stopping..."}
+            else:
+                # Other button clicks
+                background_tasks.add_task(
+                    agent.handle_interaction_payload,
+                    payload
+                )
         
         # Return a 200 OK immediately to acknowledge receipt
         return {}

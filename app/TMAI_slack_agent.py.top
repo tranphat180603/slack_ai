@@ -1,0 +1,2 @@
+# Global dictionary to track stop requests
+STOP_REQUESTS = {}

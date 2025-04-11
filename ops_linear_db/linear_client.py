@@ -56,6 +56,34 @@ class LinearClient:
         except Exception as e:
             raise LinearAuthError(f"Failed to initialize Linear client: {str(e)}")
     
+    def getUserMessageByNumber(self, number: int, conversation_history: list) -> list:
+        """
+        Retrieve the most recent N user messages from conversation history.
+        
+        Args:
+            number: The number of most recent user messages to retrieve
+            conversation_history: List of conversation messages from ConversationManager
+            
+        Returns:
+            List of the most recent user messages content or an empty list if none found
+        """
+        if not conversation_history:
+            return []
+            
+        # Filter only user messages
+        user_messages = [msg for msg in conversation_history if msg.get("role") == "user"]
+        
+        # Validate number
+        if number <= 0 or not user_messages:
+            return []
+            
+        # Get the specified number of most recent messages
+        # If number is greater than available messages, return all
+        result_messages = user_messages[-number:] if number < len(user_messages) else user_messages
+        
+        # Return the message contents
+        return [msg.get("content", "") for msg in result_messages]
+    
     # ---------------------------
     # Core Data Retrieval Functions (Team-Scoped)
     # ---------------------------
@@ -787,7 +815,7 @@ class LinearClient:
                 id
                 number
               }
-              archived
+              archivedAt
             }
           }
         }
@@ -795,6 +823,76 @@ class LinearClient:
         variables = {"number": issueNumber, "input": data}
         result = self._execute_query(query, variables)
         return result.get("issueUpdate", {})
+        
+    def updateIssueById(self, issueId: str, data: dict):
+        """
+        Update an existing issue identified by issueId (UUID).
+        
+        Args:
+            issueId: The issue ID (UUID) to update
+            data: Dictionary containing fields to update:
+                - title: New title
+                - description: New markdown description
+                - priority: Float (0.0: None, 1.0: Urgent, 2.0: High, 3.0: Medium, 4.0: Low)
+                - estimate: Float value for estimate points
+                - stateId: ID of the new workflow state
+                - assigneeId: ID of the user to assign to
+                - labelIds: List of label IDs to assign
+                - cycleId: ID of the cycle to move to
+                - projectId: ID of the project to move to
+                - parentId: ID of the new parent issue
+                - archived: Boolean to archive/unarchive the issue
+        """
+        query = gql("""
+        mutation ($id: String!, $input: IssueUpdateInput!) {
+          issueUpdate(id: $id, input: $input) {
+            success
+            issue {
+              id
+              number
+              title
+              description
+              priority
+              estimate
+              state {
+                id
+                name
+                type
+              }
+              assignee {
+                id
+                displayName
+              }
+              labels {
+                nodes {
+                  id
+                  name
+                }
+              }
+              cycle {
+                id
+                number
+              }
+              project {
+                id
+                name
+              }
+              team {
+                id
+                key
+              }
+              parent {
+                id
+                number
+              }
+              archivedAt
+            }
+          }
+        }
+        """)
+        variables = {"id": issueId, "input": data}
+        result = self._execute_query(query, variables)
+        return result.get("issueUpdate", {}).get("issue", {})
 
     def createComment(self, issueNumber: int, commentData: dict):
         """Add a comment to an issue."""
@@ -814,6 +912,27 @@ class LinearClient:
         }
         """)
         variables = {"issueNumber": issueNumber, "input": commentData}
+        result = self._execute_query(query, variables)
+        return result.get("commentCreate", {}).get("comment", {})
+        
+    def createCommentById(self, issueId: str, commentData: dict):
+        """Add a comment to an issue using the issue ID instead of number."""
+        query = gql("""
+        mutation ($id: String!, $input: CommentCreateInput!) {
+          commentCreate(id: $id, input: $input) {
+            comment {
+              id
+              number
+              body
+              user {
+                id
+                displayName
+              }
+            }
+          }
+        }
+        """)
+        variables = {"id": issueId, "input": commentData}
         result = self._execute_query(query, variables)
         return result.get("commentCreate", {}).get("comment", {})
     

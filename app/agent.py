@@ -258,8 +258,120 @@ class Commander:
             # Fallback to direct response
             return {
                 "order": user_query,
-                "platform": ["direct_response"]
+                "platform": [],
+                "direct_response": "I'm having trouble processing your request. Could you please rephrase or provide more details?"
             }
+
+    def format_slack_message(self, message: str) -> str:
+        """
+        Format a message according to Slack markdown rules.
+        Converts common markdown to Slack-specific format.
+        
+        Rules:
+        - Use *text* for bold (not **text**)
+        - Use _text_ for italics (not *text* for italics)
+        - Use ~text~ for strikethrough
+        - Use `code` for inline code
+        - Use ```code block``` for multi-line code blocks
+        - Use > for block quotes
+        - For links, use <URL> or <URL|display text>
+        - For lists, use - followed by a space
+        - No #, ##, ### for headers
+        """
+        if not message:
+            return message
+
+        # Replace double asterisks with single asterisks for bold (GitHub/CommonMark style to Slack style)
+        message = message.replace("**", "*")
+        
+        # Fix asterisks for bold that might have been doubled inadvertently
+        message = message.replace("****", "**")
+        
+        # Replace #, ##, ### headers with bold text
+        lines = message.split("\n")
+        for i in range(len(lines)):
+            if lines[i].startswith("# "):
+                lines[i] = "*" + lines[i][2:] + "*"
+            elif lines[i].startswith("## "):
+                lines[i] = "*" + lines[i][3:] + "*"
+            elif lines[i].startswith("### "):
+                lines[i] = "*" + lines[i][4:] + "*"
+            
+            # Ensure lists use - (hyphen) instead of * (asterisk)
+            if lines[i].strip().startswith("* "):
+                lines[i] = "- " + lines[i].strip()[2:]
+        
+        # Rejoin processed lines
+        message = "\n".join(lines)
+        
+        # Fix link formatting:
+        # Convert markdown links [text](url) to Slack format <url|text>
+        import re
+        message = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<\2|\1>', message)
+        
+        # Fix standalone URLs that aren't already in Slack format
+        # Look for URLs not already wrapped in < >
+        url_pattern = r'(?<![<|])(https?://[^\s<>"\']+(![^\s<>"\')])*)'
+        message = re.sub(url_pattern, r'<\1>', message)
+        
+        # Handle common error: double backticks in code blocks
+        # First, normalize any ```` or more to triple backticks
+        message = re.sub(r'```{3,}', '```', message)
+        
+        # Fix any double backticks to be single backticks for inline code
+        # but only if they're not part of a code block
+        in_code_block = False
+        result_lines = []
+        
+        for line in message.split('\n'):
+            if line.count('```') % 2 == 1:  # Line has odd number of triple backticks
+                in_code_block = not in_code_block
+                result_lines.append(line)
+            else:
+                if not in_code_block:
+                    # Only replace double backticks outside code blocks
+                    line = line.replace('``', '`')
+                result_lines.append(line)
+        
+        message = '\n'.join(result_lines)
+        
+        # Handles asterisks for italics by replacing them with underscores
+        # This is complex because we need to avoid replacing bold formatting
+        # For simplicity, we'll use regex to find italic patterns not inside code blocks
+        def replace_italic(match):
+            return f"_{match.group(1)}_"
+        
+        # Find single asterisks around text (but not if they are double asterisks for bold)
+        # and replace with underscores, but only outside code blocks
+        in_code_block = False
+        result_lines = []
+        
+        for line in message.split('\n'):
+            if '```' in line:
+                code_blocks = line.split('```')
+                for i, block in enumerate(code_blocks):
+                    if i % 2 == 0 and i < len(code_blocks) - 1:  # Outside code block and not the last segment
+                        # Replace italics with underscores outside code blocks
+                        block = re.sub(r'(?<!\*)\*([^*\n]+)\*(?!\*)', replace_italic, block)
+                    code_blocks[i] = block
+                line = '```'.join(code_blocks)
+            else:  # Line doesn't contain code blocks
+                line = re.sub(r'(?<!\*)\*([^*\n]+)\*(?!\*)', replace_italic, line)
+            
+            result_lines.append(line)
+            
+        message = '\n'.join(result_lines)
+        
+        # Fix any remaining markdown issues
+        
+        # Ensure *** (bold+italic) becomes *_text_*
+        message = re.sub(r'\*\*\*([^*]+)\*\*\*', r'*_\1_*', message)
+        
+        # Final check for any unwanted triple asterisks
+        message = message.replace("***", "*_")
+        message = message.replace("***", "_*")
+        
+        return message
 
     def response(self, order: str, execution_results: Dict[str, Any]) -> str:
         """Generate a response based on execution results"""
@@ -301,7 +413,10 @@ class Commander:
             # For the final response, we don't need to parse it as JSON since it's a plain string
             logger.debug(f"[Commander] API response for final response: {response}")
             
-        return response
+        # Format the response for Slack before returning
+        formatted_response = self.format_slack_message(response)
+        
+        return formatted_response
 
 class Captain:
     def __init__(self, model: str, prompts: Dict = None):
@@ -409,7 +524,7 @@ class Captain:
         # Get response from LLM
         response = self.client.response_reasoning(
             prompt=combined_prompt,
-            reasoning_effort="medium"
+            reasoning_effort="high"
         )
         
         # Calculate execution time
@@ -518,7 +633,7 @@ class Captain:
         # Get response from LLM
         response = self.client.response_reasoning(
             prompt=combined_prompt,
-            reasoning_effort="medium"
+            reasoning_effort="high"
         )
         
         # Calculate execution time
@@ -724,7 +839,7 @@ class Soldier:
         tool_call = self.client.use_tool(
             prompt=combined_prompt, 
             tools=[tool_schema],
-            reasoning_effort="low"
+            reasoning_effort="high"
         )
         
         # Log the tool call response

@@ -33,6 +33,8 @@ class TokenUsageTracker:
         self.calls = 0
         self.input_tokens = 0
         self.output_tokens = 0
+        self.reasoning_tokens = 0  # Add tracking for reasoning tokens
+        self.cached_tokens = 0  # Add tracking for cached tokens
         self.model_counts = {}
         self.function_counts = {}
         self.last_tracked_model = None
@@ -59,11 +61,13 @@ class TokenUsageTracker:
             # Fallback to rough character-based estimate
             return len(text) // 4
     
-    def add_call(self, function_name: str, model: str, input_tokens: int, output_tokens: int = 0):
+    def add_call(self, function_name: str, model: str, input_tokens: int, output_tokens: int = 0, reasoning_tokens: int = 0, cached_tokens: int = 0):
         """Record a new API call with token usage"""
         self.calls += 1
         self.input_tokens += input_tokens
         self.output_tokens += output_tokens
+        self.reasoning_tokens += reasoning_tokens  # Track reasoning tokens
+        self.cached_tokens += cached_tokens  # Track cached tokens
         
         # Track model used
         self.last_tracked_model = model
@@ -71,27 +75,38 @@ class TokenUsageTracker:
         
         # Track by model
         if model not in self.model_counts:
-            self.model_counts[model] = {"calls": 0, "input_tokens": 0, "output_tokens": 0}
+            self.model_counts[model] = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0, "cached_tokens": 0}
         
         self.model_counts[model]["calls"] += 1
         self.model_counts[model]["input_tokens"] += input_tokens
         self.model_counts[model]["output_tokens"] += output_tokens
+        self.model_counts[model]["reasoning_tokens"] += reasoning_tokens
+        self.model_counts[model]["cached_tokens"] += cached_tokens
         
         # Track by function
         if function_name not in self.function_counts:
-            self.function_counts[function_name] = {"calls": 0, "input_tokens": 0, "output_tokens": 0}
+            self.function_counts[function_name] = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0, "cached_tokens": 0}
             
         self.function_counts[function_name]["calls"] += 1
         self.function_counts[function_name]["input_tokens"] += input_tokens
         self.function_counts[function_name]["output_tokens"] += output_tokens
+        self.function_counts[function_name]["reasoning_tokens"] += reasoning_tokens
+        self.function_counts[function_name]["cached_tokens"] += cached_tokens
     
     def get_usage_report(self) -> Dict[str, Any]:
         """Get a report of token usage"""
+        total_tokens = self.input_tokens + self.output_tokens
+        
+        # Include cached tokens in the total calculation when displaying to user
+        # (They're already included in input_tokens, but we display them separately)
+        
         return {
             "total_calls": self.calls,
             "total_input_tokens": self.input_tokens,
             "total_output_tokens": self.output_tokens,
-            "total_tokens": self.input_tokens + self.output_tokens,
+            "total_reasoning_tokens": self.reasoning_tokens,
+            "total_cached_tokens": self.cached_tokens,
+            "total_tokens": total_tokens,
             "estimated_cost_usd": self.estimate_cost(),
             "model_breakdown": self.model_counts,
             "function_breakdown": self.function_counts
@@ -104,26 +119,34 @@ class TokenUsageTracker:
         # Define approximate costs per 1M tokens for different models
         # These are estimates and should be updated as prices change
         costs = {
-            "gpt-4o": {"input": 5.0, "output": 15.0},        # $5/1M input, $15/1M output
-            "gpt-4o-mini": {"input": 0.15, "output": 0.6},   # $0.15/1M input, $0.6/1M output
-            "o1-mini": {"input": 3.0, "output": 15.0},       # Claude 3.5 Sonnet
-            "o1": {"input": 8.0, "output": 24.0},            # Claude 3.5 Opus
-            "o3-mini": {"input": 0.25, "output": 1.25},      # Claude 3 Haiku
-            "o3": {"input": 3.0, "output": 15.0}             # Claude 3 Sonnet
+            "gpt-4o": {"input": 2.5, "cached": 1.25, "output": 10.0},    # $2.5/1M input, $1.25/1M cached, $10/1M output
+            "gpt-4o-mini": {"input": 0.15, "cached": 0.075, "output": 0.6}, # $0.15/1M input, $0.075/1M cached, $0.6/1M output
+            "o1-mini": {"input": 3.0, "cached": 1.5, "output": 15.0},    # Claude 3.5 Sonnet ($3/1M input, $1.5/1M cached, $15/1M output)
+            "o1": {"input": 15.0, "cached": 7.5, "output": 60.0},        # Claude 3.5 Opus ($15/1M input, $7.5/1M cached, $60/1M output)
+            "o3-mini": {"input": 1.1, "cached": 0.55, "output": 4.4},    # Claude 3 Haiku ($1.1/1M input, $0.55/1M cached, $4.4/1M output)
+            "o3": {"input": 3.0, "cached": 1.5, "output": 15.0}          # Claude 3 Sonnet ($3/1M input, $1.5/1M cached, $15/1M output)
         }
         
         # Default cost rates if specific model not found
-        default_cost = {"input": 1.0, "output": 2.0}
+        default_cost = {"input": 1.0, "cached": 0.5, "output": 2.0}
         
         for model, usage in self.model_counts.items():
             # Get cost rates for this model, or use default
             model_base = model.split("-")[0]  # Handle model variants
             cost_rates = costs.get(model, default_cost)
             
-            # Calculate cost
-            input_cost = (usage["input_tokens"] / 1_000_000) * cost_rates["input"]
-            output_cost = (usage["output_tokens"] / 1_000_000) * cost_rates["output"]
-            cost += input_cost + output_cost
+            # Calculate cost - accounting for both regular and cached tokens
+            regular_input_tokens = usage["input_tokens"] - usage["cached_tokens"]
+            cached_tokens = usage["cached_tokens"]
+            output_tokens = usage["output_tokens"]
+            
+            # Calculate costs for each token type
+            input_cost = (regular_input_tokens / 1_000_000) * cost_rates["input"]
+            cached_cost = (cached_tokens / 1_000_000) * cost_rates["cached"]
+            output_cost = (output_tokens / 1_000_000) * cost_rates["output"]
+            
+            # Add to total cost
+            cost += input_cost + cached_cost + output_cost
             
         return cost
     
@@ -135,15 +158,23 @@ class TokenUsageTracker:
             logger.log(log_level, "===== TOKEN USAGE REPORT =====")
             logger.log(log_level, f"Total API calls: {report['total_calls']}")
             logger.log(log_level, f"Total tokens: {report['total_tokens']} (Input: {report['total_input_tokens']}, Output: {report['total_output_tokens']})")
+            if report['total_cached_tokens'] > 0:
+                logger.log(log_level, f"Total cached tokens: {report['total_cached_tokens']} (billed at reduced rate)")
+            if report['total_reasoning_tokens'] > 0:
+                logger.log(log_level, f"Total reasoning tokens: {report['total_reasoning_tokens']}")
             logger.log(log_level, f"Estimated cost: ${report['estimated_cost_usd']:.5f} USD")
             
             logger.log(log_level, "Model breakdown:")
             for model, usage in report['model_breakdown'].items():
-                logger.log(log_level, f"  {model}: {usage['calls']} calls, {usage['input_tokens']} input, {usage['output_tokens']} output")
+                cached_info = f", cached: {usage.get('cached_tokens', 0)}" if usage.get('cached_tokens', 0) > 0 else ""
+                reasoning_info = f", reasoning: {usage.get('reasoning_tokens', 0)}" if usage.get('reasoning_tokens', 0) > 0 else ""
+                logger.log(log_level, f"  {model}: {usage['calls']} calls, {usage['input_tokens']} input, {usage['output_tokens']} output tokens{cached_info}{reasoning_info}")
             
             logger.log(log_level, "Function breakdown:")
             for func, usage in report['function_breakdown'].items():
-                logger.log(log_level, f"  {func}: {usage['calls']} calls, {usage['input_tokens']} input, {usage['output_tokens']} output")
+                cached_info = f", cached: {usage.get('cached_tokens', 0)}" if usage.get('cached_tokens', 0) > 0 else ""
+                reasoning_info = f", reasoning: {usage.get('reasoning_tokens', 0)}" if usage.get('reasoning_tokens', 0) > 0 else ""
+                logger.log(log_level, f"  {func}: {usage['calls']} calls, {usage['input_tokens']} input, {usage['output_tokens']} output tokens{cached_info}{reasoning_info}")
             
             logger.log(log_level, "===============================")
 
@@ -172,19 +203,15 @@ class OpenaiClient(ABC):
         )
         
         # Count input tokens for logging only (will be replaced with actual count from API)
-        input_text = system_prompt or "" + prompt
+        input_text = (system_prompt or "") + prompt
         estimated_input_tokens = self.token_tracker.count_tokens(input_text, self.model)
-        
-        # Log the complete request being sent to OpenAI
-        logger.debug(f"===== REQUEST TO OPENAI ({self.model}) =====")
-        logger.debug(f"System prompt: {system_prompt}")
-        logger.debug(f"User prompt: {prompt}")
-        logger.debug(f"Estimated input tokens: {estimated_input_tokens}")
-        logger.debug("======================================")
         
         # Reset last_tracked model to detect if we'll get usage info
         self.token_tracker.last_tracked_model = None
         self.token_tracker.last_tracked_function = None
+        
+        # Debug logging
+        logger.debug(f"Using responses.create with model={self.model}")
         
         response = self.client.responses.create(
             model=self.model,
@@ -203,62 +230,62 @@ class OpenaiClient(ABC):
                         print(delta, end="", flush=True)
                 # Check for done event with usage information
                 elif hasattr(chunk, 'type') and chunk.type == 'response.done':
-                    if hasattr(chunk, 'response') and hasattr(chunk.respon, 'usage'):
+                    if hasattr(chunk, 'response') and hasattr(chunk.response, 'usage'):
                         # Extract usage information
                         usage = chunk.response.usage
                         input_tokens = usage.input_tokens
                         output_tokens = usage.output_tokens
+                        cached_tokens = 0
+                        
+                        # Extract cached tokens if available
+                        if hasattr(usage, 'input_tokens_details') and hasattr(usage.input_tokens_details, 'cached_tokens'):
+                            cached_tokens = usage.input_tokens_details.cached_tokens
+                            logger.debug(f"Found {cached_tokens} cached tokens in response")
                         
                         # Track token usage with actual counts from API
-                        self.token_tracker.add_call("response", self.model, input_tokens, output_tokens)
-                        
-                        # Log token usage
-                        logger.debug(f"Actual input tokens: {input_tokens}")
-                        logger.debug(f"Actual output tokens: {output_tokens}")
+                        self.token_tracker.add_call("response", self.model, input_tokens, output_tokens, 0, cached_tokens)
             print()  # Add a newline at the end
             
             # If we didn't get usage from API, use estimates as fallback
             if self.token_tracker.last_tracked_function != "response" or self.token_tracker.last_tracked_model != self.model:
                 output_tokens = self.token_tracker.count_tokens(full_response, self.model)
                 # Track token usage with estimated counts
-                self.token_tracker.add_call("response", self.model, estimated_input_tokens, output_tokens)
-                logger.debug(f"Using estimated tokens (no API data): input={estimated_input_tokens}, output={output_tokens}")
-            
-            # Log the full response
-            logger.debug(f"===== RESPONSE FROM OPENAI (STREAM) =====")
-            logger.debug(f"{full_response}")
-            logger.debug("========================================")
-            
-            # Log token usage if in debug mode
-            self.token_tracker.log_report()
+                self.token_tracker.add_call("response", self.model, estimated_input_tokens, output_tokens, 0, 0)
             
             return full_response
         else:
-            result = response.output[0].content[0].text
-            
-            # Get actual token usage from API response
-            input_tokens = estimated_input_tokens
-            output_tokens = self.token_tracker.count_tokens(result, self.model)
-            
-            # Extract token counts from response if available
-            if hasattr(response, 'usage'):
-                input_tokens = response.usage.input_tokens
-                output_tokens = response.usage.output_tokens
-            
-            # Track token usage with actual counts
-            self.token_tracker.add_call("response", self.model, input_tokens, output_tokens)
-            
-            # Log the full response
-            logger.debug(f"===== RESPONSE FROM OPENAI =====")
-            logger.debug(f"{result}")
-            logger.debug(f"Actual input tokens: {input_tokens}")
-            logger.debug(f"Actual output tokens: {output_tokens}")
-            logger.debug("==============================")
-            
-            # Log token usage if in debug mode
-            self.token_tracker.log_report()
-            
-            return result
+            try:
+                # For GPT models, extract text content
+                result = response.output[0].content[0].text
+                
+                # Extract token usage from API response
+                input_tokens = estimated_input_tokens
+                output_tokens = self.token_tracker.count_tokens(result, self.model)
+                cached_tokens = 0
+                
+                if hasattr(response, 'usage'):
+                    # Extract actual token usage from the response object
+                    input_tokens = response.usage.input_tokens
+                    output_tokens = response.usage.output_tokens
+                    
+                    # Extract cached tokens if available
+                    if hasattr(response.usage, 'input_tokens_details') and hasattr(response.usage.input_tokens_details, 'cached_tokens'):
+                        cached_tokens = response.usage.input_tokens_details.cached_tokens
+                        logger.debug(f"Found {cached_tokens} cached tokens in response")
+                
+                # Track token usage
+                self.token_tracker.add_call("response", self.model, input_tokens, output_tokens, 0, cached_tokens)
+                
+                return result
+            except Exception as e:
+                logger.error(f"Error extracting response content: {str(e)}")
+                
+                # Fallback - use string representation
+                result = str(response)
+                output_tokens = self.token_tracker.count_tokens(result, self.model)
+                self.token_tracker.add_call("response", self.model, estimated_input_tokens, output_tokens, 0, 0)
+                
+                return result
 
     def response_reasoning(self, prompt: str, reasoning_effort: str, stream: bool = False) -> str:
         assert self.model.startswith("o"), "Only reasoning models are supported"
@@ -275,22 +302,16 @@ class OpenaiClient(ABC):
                 "content": prompt
             }
         )
-        
         # Count input tokens for logging only (will be replaced with actual count from API)
         input_text = "You are a helpful assistant that can reason about the user's prompt." + prompt
         estimated_input_tokens = self.token_tracker.count_tokens(input_text, self.model)
         
-        # Log the complete request being sent to OpenAI
-        logger.debug(f"===== REQUEST TO OPENAI ({self.model}) =====")
-        logger.debug(f"Reasoning effort: {reasoning_effort}")
-        logger.debug(f"System prompt: You are a helpful assistant that can reason about the user's prompt.")
-        logger.debug(f"User prompt: {prompt}")
-        logger.debug(f"Estimated input tokens: {estimated_input_tokens}")
-        logger.debug("======================================")
-        
         # Reset last_tracked model to detect if we'll get usage info
         self.token_tracker.last_tracked_model = None
         self.token_tracker.last_tracked_function = None
+        
+        # Debug logging
+        logger.debug(f"Using responses.create with model={self.model} and reasoning.effort={reasoning_effort}")
         
         response = self.client.responses.create(
             model=self.model,
@@ -314,29 +335,27 @@ class OpenaiClient(ABC):
                         usage = chunk.response.usage
                         input_tokens = usage.input_tokens
                         output_tokens = usage.output_tokens
+                        reasoning_tokens = 0
+                        cached_tokens = 0
+                        
+                        # Extract cached tokens if available
+                        if hasattr(usage, 'input_tokens_details') and hasattr(usage.input_tokens_details, 'cached_tokens'):
+                            cached_tokens = usage.input_tokens_details.cached_tokens
+                            logger.debug(f"Found {cached_tokens} cached tokens in response")
+                        
+                        # Extract reasoning tokens if available
+                        if hasattr(usage, 'output_tokens_details') and hasattr(usage.output_tokens_details, 'reasoning_tokens'):
+                            reasoning_tokens = usage.output_tokens_details.reasoning_tokens
                         
                         # Track token usage with actual counts from API
-                        self.token_tracker.add_call("response_reasoning", self.model, input_tokens, output_tokens)
-                        
-                        # Log token usage
-                        logger.debug(f"Actual input tokens: {input_tokens}")
-                        logger.debug(f"Actual output tokens: {output_tokens}")
+                        self.token_tracker.add_call("response_reasoning", self.model, input_tokens, output_tokens, reasoning_tokens, cached_tokens)
             print()  # Add a newline at the end
             
             # If we didn't get usage from API, use estimates as fallback
             if self.token_tracker.last_tracked_function != "response_reasoning" or self.token_tracker.last_tracked_model != self.model:
                 output_tokens = self.token_tracker.count_tokens(full_response, self.model)
                 # Track token usage with estimated counts
-                self.token_tracker.add_call("response_reasoning", self.model, estimated_input_tokens, output_tokens)
-                logger.debug(f"Using estimated tokens (no API data): input={estimated_input_tokens}, output={output_tokens}")
-            
-            # Log the full response
-            logger.debug(f"===== RESPONSE FROM OPENAI (STREAM) =====")
-            logger.debug(f"{full_response}")
-            logger.debug("========================================")
-            
-            # Log token usage if in debug mode
-            self.token_tracker.log_report()
+                self.token_tracker.add_call("response_reasoning", self.model, estimated_input_tokens, output_tokens, 0, 0)
             
             return full_response
         else:
@@ -354,24 +373,25 @@ class OpenaiClient(ABC):
                                     # Get actual token usage from API response
                                     input_tokens = estimated_input_tokens
                                     output_tokens = self.token_tracker.count_tokens(result, self.model)
+                                    reasoning_tokens = 0
+                                    cached_tokens = 0
                                     
                                     # Extract token counts from response if available
                                     if hasattr(response, 'usage'):
                                         input_tokens = response.usage.input_tokens
                                         output_tokens = response.usage.output_tokens
+                                        
+                                        # Extract cached tokens if available
+                                        if hasattr(response.usage, 'input_tokens_details') and hasattr(response.usage.input_tokens_details, 'cached_tokens'):
+                                            cached_tokens = response.usage.input_tokens_details.cached_tokens
+                                            logger.debug(f"Found {cached_tokens} cached tokens in response")
+                                        
+                                        # Extract reasoning tokens if available
+                                        if hasattr(response.usage, 'output_tokens_details') and hasattr(response.usage.output_tokens_details, 'reasoning_tokens'):
+                                            reasoning_tokens = response.usage.output_tokens_details.reasoning_tokens
                                     
                                     # Track token usage with actual counts
-                                    self.token_tracker.add_call("response_reasoning", self.model, input_tokens, output_tokens)
-                                    
-                                    # Log the full response
-                                    logger.debug(f"===== RESPONSE FROM OPENAI (REASONING) =====")
-                                    logger.debug(f"{result}")
-                                    logger.debug(f"Actual input tokens: {input_tokens}")
-                                    logger.debug(f"Actual output tokens: {output_tokens}")
-                                    logger.debug("========================================")
-                                    
-                                    # Log token usage if in debug mode
-                                    self.token_tracker.log_report()
+                                    self.token_tracker.add_call("response_reasoning", self.model, input_tokens, output_tokens, reasoning_tokens, cached_tokens)
                                     
                                     return result
                 
@@ -383,17 +403,25 @@ class OpenaiClient(ABC):
                     # Get token usage from response if available
                     input_tokens = estimated_input_tokens
                     output_tokens = self.token_tracker.count_tokens(str(result), self.model)
+                    reasoning_tokens = 0
+                    cached_tokens = 0
                     
                     # Extract token counts from response if available
                     if hasattr(response, 'usage'):
                         input_tokens = response.usage.input_tokens
                         output_tokens = response.usage.output_tokens
+                        
+                        # Extract cached tokens if available
+                        if hasattr(response.usage, 'input_tokens_details') and hasattr(response.usage.input_tokens_details, 'cached_tokens'):
+                            cached_tokens = response.usage.input_tokens_details.cached_tokens
+                            logger.debug(f"Found {cached_tokens} cached tokens in response")
+                        
+                        # Extract reasoning tokens if available
+                        if hasattr(response.usage, 'output_tokens_details') and hasattr(response.usage.output_tokens_details, 'reasoning_tokens'):
+                            reasoning_tokens = response.usage.output_tokens_details.reasoning_tokens
                     
                     # Track token usage
-                    self.token_tracker.add_call("response_reasoning", self.model, input_tokens, output_tokens)
-                    
-                    # Log token usage if in debug mode
-                    self.token_tracker.log_report()
+                    self.token_tracker.add_call("response_reasoning", self.model, input_tokens, output_tokens, reasoning_tokens, cached_tokens)
                     
                     return result
                     
@@ -404,36 +432,32 @@ class OpenaiClient(ABC):
                 # Get token usage from response if available
                 input_tokens = estimated_input_tokens
                 output_tokens = self.token_tracker.count_tokens(result, self.model)
+                reasoning_tokens = 0
+                cached_tokens = 0
                 
                 # Extract token counts from response if available
                 if hasattr(response, 'usage'):
                     input_tokens = response.usage.input_tokens
                     output_tokens = response.usage.output_tokens
+                    
+                    # Extract cached tokens if available
+                    if hasattr(response.usage, 'input_tokens_details') and hasattr(response.usage.input_tokens_details, 'cached_tokens'):
+                        cached_tokens = response.usage.input_tokens_details.cached_tokens
+                        logger.debug(f"Found {cached_tokens} cached tokens in response")
+                    
+                    # Extract reasoning tokens if available
+                    if hasattr(response.usage, 'output_tokens_details') and hasattr(response.usage.output_tokens_details, 'reasoning_tokens'):
+                        reasoning_tokens = response.usage.output_tokens_details.reasoning_tokens
                 
                 # Track token usage
-                self.token_tracker.add_call("response_reasoning", self.model, input_tokens, output_tokens)
-                
-                logger.debug(f"Raw response output: {response.output}")
-                
-                # Log token usage if in debug mode
-                self.token_tracker.log_report()
+                self.token_tracker.add_call("response_reasoning", self.model, input_tokens, output_tokens, reasoning_tokens, cached_tokens)
                 
                 return result
             
             logger.error("Failed to extract text from reasoning response")
             
             # Track token usage for error case with estimated values
-            input_tokens = estimated_input_tokens
-            
-            # Extract token counts from response if available
-            if hasattr(response, 'usage'):
-                input_tokens = response.usage.input_tokens
-            
-            # Track token usage
-            self.token_tracker.add_call("response_reasoning", self.model, input_tokens, 0)
-            
-            # Log token usage if in debug mode
-            self.token_tracker.log_report()
+            self.token_tracker.add_call("response_reasoning", self.model, estimated_input_tokens, 0, 0, 0)
             
             return "Error: Could not extract response text"
         
@@ -444,17 +468,12 @@ class OpenaiClient(ABC):
         input_text = prompt + json.dumps(tools, ensure_ascii=False)
         estimated_input_tokens = self.token_tracker.count_tokens(input_text, self.model)
         
-        # Log the complete request being sent to OpenAI
-        logger.debug(f"===== TOOL REQUEST TO OPENAI ({self.model}) =====")
-        logger.debug(f"Reasoning effort: {reasoning_effort}")
-        logger.debug(f"Prompt: {prompt}")
-        logger.debug(f"Tools: {json.dumps(tools, indent=2)}")
-        logger.debug(f"Estimated input tokens: {estimated_input_tokens}")
-        logger.debug("===========================================")
-        
         # Reset last_tracked model to detect if we'll get usage info
         self.token_tracker.last_tracked_model = None
         self.token_tracker.last_tracked_function = None
+        
+        # Debug logging
+        logger.debug(f"Using responses.create with model={self.model}, reasoning.effort={reasoning_effort}, and tools={len(tools or [])}")
         
         response = self.client.responses.create(
             model=self.model,
@@ -474,18 +493,8 @@ class OpenaiClient(ABC):
         if not function_call:
             logger.warning("No function call found in tool response")
             
-            # Get token usage from response if available
-            input_tokens = estimated_input_tokens
-            
-            # Extract token counts from response if available
-            if hasattr(response, 'usage'):
-                input_tokens = response.usage.input_tokens
-            
             # Track token usage for error case
-            self.token_tracker.add_call("use_tool", self.model, input_tokens, 0)
-            
-            # Log token usage if in debug mode
-            self.token_tracker.log_report()
+            self.token_tracker.add_call("use_tool", self.model, estimated_input_tokens, 0, 0, 0)
             
             return None
             
@@ -507,25 +516,25 @@ class OpenaiClient(ABC):
         # Get token usage from response if available
         input_tokens = estimated_input_tokens
         output_tokens = estimated_output_tokens
+        reasoning_tokens = 0
+        cached_tokens = 0
         
         # Extract token counts from response if available
         if hasattr(response, 'usage'):
             input_tokens = response.usage.input_tokens
             output_tokens = response.usage.output_tokens
+            
+            # Extract cached tokens if available
+            if hasattr(response.usage, 'input_tokens_details') and hasattr(response.usage.input_tokens_details, 'cached_tokens'):
+                cached_tokens = response.usage.input_tokens_details.cached_tokens
+                logger.debug(f"Found {cached_tokens} cached tokens in use_tool response")
+            
+            # Extract reasoning tokens if available
+            if hasattr(response.usage, 'output_tokens_details') and hasattr(response.usage.output_tokens_details, 'reasoning_tokens'):
+                reasoning_tokens = response.usage.output_tokens_details.reasoning_tokens
         
         # Track token usage with actual counts when available
-        self.token_tracker.add_call("use_tool", self.model, input_tokens, output_tokens)
-        
-        # Log the tool response
-        logger.debug(f"===== TOOL RESPONSE FROM OPENAI =====")
-        logger.debug(f"Tool called: {function_call.name}")
-        logger.debug(f"Parameters: {json.dumps(arguments, indent=2)}")
-        logger.debug(f"Actual input tokens: {input_tokens}")
-        logger.debug(f"Actual output tokens: {output_tokens}")
-        logger.debug("===================================")
-        
-        # Log token usage if in debug mode
-        self.token_tracker.log_report()
+        self.token_tracker.add_call("use_tool", self.model, input_tokens, output_tokens, reasoning_tokens, cached_tokens)
         
         return tool_called
     
@@ -539,6 +548,60 @@ class OpenaiClient(ABC):
     
     def log_token_usage(self, log_level=logging.DEBUG):
         """Log token usage report at the specified level"""
+        if not logger.isEnabledFor(log_level):
+            return
+            
+        # Log usage for the specific model being used
+        if self.model in self.token_tracker.model_counts:
+            usage = self.token_tracker.model_counts[self.model]
+            logger.log(log_level, f"Token usage for {self.model}:")
+            logger.log(log_level, f"  Calls: {usage['calls']}")
+            logger.log(log_level, f"  Input tokens: {usage['input_tokens']}")
+            
+            # Always show cached tokens even at higher log levels
+            cached_tokens = usage.get('cached_tokens', 0)
+            if cached_tokens > 0:
+                logger.log(log_level, f"  Cached tokens: {cached_tokens} (billed at reduced rate)")
+            
+            logger.log(log_level, f"  Output tokens: {usage['output_tokens']}")
+            
+            if usage.get('reasoning_tokens', 0) > 0:
+                logger.log(log_level, f"  Reasoning tokens: {usage['reasoning_tokens']}")
+            
+            # Get model-specific costs
+            model_base = self.model.split("-")[0]
+            costs = {
+                "gpt-4o": {"input": 2.5, "cached": 1.25, "output": 10.0},
+                "gpt-4o-mini": {"input": 0.15, "cached": 0.075, "output": 0.6},
+                "o1-mini": {"input": 3.0, "cached": 1.5, "output": 15.0},
+                "o1": {"input": 15.0, "cached": 7.5, "output": 60.0},
+                "o3-mini": {"input": 1.1, "cached": 0.55, "output": 4.4},
+                "o3": {"input": 3.0, "cached": 1.5, "output": 15.0}
+            }
+            default_cost = {"input": 1.0, "cached": 0.5, "output": 2.0}
+            cost_rates = costs.get(self.model, default_cost)
+            
+            # Calculate regular and cached token costs
+            regular_input_tokens = usage["input_tokens"] - usage["cached_tokens"]
+            cached_tokens = usage["cached_tokens"]
+            output_tokens = usage["output_tokens"]
+            
+            regular_cost = (regular_input_tokens / 1_000_000) * cost_rates["input"]
+            cached_cost = (cached_tokens / 1_000_000) * cost_rates["cached"]
+            output_cost = (output_tokens / 1_000_000) * cost_rates["output"]
+            total_cost = regular_cost + cached_cost + output_cost
+            
+            # Log total tokens and cost breakdown
+            logger.log(log_level, f"  Total tokens: {usage['input_tokens'] + usage['output_tokens']}")
+            if cached_tokens > 0:
+                logger.log(log_level, f"  Cost breakdown: ${regular_cost:.6f} (regular input) + ${cached_cost:.6f} (cached input) + ${output_cost:.6f} (output) = ${total_cost:.6f}")
+            else:
+                logger.log(log_level, f"  Cost breakdown: ${regular_cost:.6f} (input) + ${output_cost:.6f} (output) = ${total_cost:.6f}")
+        else:
+            # If no usage for this model yet
+            logger.log(log_level, f"No token usage recorded for {self.model}")
+            
+        # Full report at any log level - not just debug
         self.token_tracker.log_report(log_level)
 
 def test():
@@ -606,10 +669,9 @@ def test():
     
     
     # Try use_tool (this works)
-    tool_response = client.response_reasoning("what are the tasks I have to do for this cycle?. My name is Phat", stream=True, reasoning_effort="low")
+    tool_response = client.response_reasoning("How to solve the problem of creating suitable context for an agent to use? What are the best practices?", stream=False, reasoning_effort="low")
     
-    # Log final token usage report
-    client.log_token_usage(logging.INFO)
+    print(tool_response)
     
 
 if __name__ == "__main__":
