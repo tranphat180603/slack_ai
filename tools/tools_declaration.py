@@ -9,6 +9,7 @@ import inspect
 from typing import Dict, List, Optional, Any, Union, Tuple, Callable
 from dotenv import load_dotenv
 from functools import wraps
+import traceback
 
 load_dotenv()
 
@@ -43,21 +44,42 @@ class LinearParameterAdapter:
     @staticmethod
     def adapt_filter_issues(params: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Adapts parameters from the OpenAI function schema to the criteria needed for filterIssues.
+        Convert flat filterIssues parameters to criteria object.
         
-        Only adds parameters to the criteria if they have non-null, non-empty values.
+        Args:
+            params: Dictionary of parameters:
+                - team_key: Team key (enum: ENG, OPS, RES, AI, MKT, PRO)
+                - issue_number: Issue number to filter by
+                - state: State name (e.g. 'Todo', 'In Progress', 'Done')
+                - priority: Priority level (0.0: None, 1.0: Urgent, 2.0: High, 3.0: Medium, 4.0: Low)
+                - assignee_name: Assignee display name (exact match)
+                - assignee_contains: Assignee name contains (case-insensitive)
+                - title_contains: Title contains text (case-insensitive)
+                - description_contains: Description contains text (case-insensitive)
+                - cycle_number: Cycle number
+                - project_id: Project ID
+                - label_name: Label name
+                - first/limit: Maximum number of issues to return
+                - include_description: Whether to include description in results
+                
+        Returns:
+            Dictionary with adapted parameters
         """
-        criteria = {}
-        if "criteria" in params:
+        if 'criteria' in params and params['criteria'] is not None:
             return params
-        
-        # Team parameter is typically needed for Linear operations
-        if params.get("number") and params["number"].strip():
-            criteria["number"] = {"eq": params["number"]}
             
-        if params.get("teamKey") and params["teamKey"].strip():
-            criteria["team"] = {"key": {"eq": params["teamKey"]}}
+        criteria = {}
         
+        # Team key
+        if params.get("team_key") or params.get("teamKey"):
+            team_key = params.get("team_key") or params.get("teamKey")
+            criteria["team"] = {"key": {"eq": team_key}}
+        
+        # Issue number filter    
+        if params.get("issue_number") or params.get("issueNumber"):
+            issue_number = params.get("issue_number") or params.get("issueNumber")
+            criteria["number"] = {"eq": issue_number}
+            
         # Add state filter if provided
         if params.get("state") and params["state"].strip():
             criteria["state"] = {"name": {"eq": params["state"]}}
@@ -67,14 +89,16 @@ class LinearParameterAdapter:
         if params.get("priority") is not None and params["priority"] != 0 and params["priority"] != 0.0:
             criteria["priority"] = {"eq": float(params["priority"])}
         
-        # Add assignee filter if provided
+        # Handle assignee filters - exact match vs contains
         if params.get("assignee_name") and params["assignee_name"].strip():
             criteria["assignee"] = {"displayName": {"eq": params["assignee_name"]}}
-        
+        elif params.get("assignee_contains") and params["assignee_contains"].strip():
+            criteria["assignee"] = {"displayName": {"containsIgnoreCase": params["assignee_contains"]}}
+            
         # Add cycle filter if provided
-        if params.get("cycle_number") is not None and params["cycle_number"] != 0:
+        if params.get("cycle_number") and params["cycle_number"] > 0:
             criteria["cycle"] = {"number": {"eq": params["cycle_number"]}}
-        
+            
         # Add project filter if provided
         if params.get("project_id") and params["project_id"].strip():
             criteria["project"] = {"id": {"eq": params["project_id"]}}
@@ -84,11 +108,25 @@ class LinearParameterAdapter:
             # For label, we use a different structure that finds issues with ANY label matching the name
             criteria["labels"] = {"some": {"name": {"eq": params["label_name"]}}}
         
+        # Add title contains filter
+        if params.get("title_contains") and params["title_contains"].strip():
+            criteria["title"] = {"containsIgnoreCase": params["title_contains"]}
+            
+        # Add description contains filter
+        if params.get("description_contains") and params["description_contains"].strip():
+            criteria["description"] = {"containsIgnoreCase": params["description_contains"]}
+        
         result = {"criteria": criteria}
         
         # Add limit if provided
         if params.get("limit") is not None and params["limit"] > 0:
             result["limit"] = params["limit"]
+        elif params.get("first") is not None and params["first"] > 0:
+            result["limit"] = params["first"]
+            
+        # Pass through include_description parameter
+        if "include_description" in params:
+            result["include_description"] = params["include_description"]
         
         return result
     
@@ -103,9 +141,13 @@ class LinearParameterAdapter:
         # Map parameters
         if 'display_name' in params and params['display_name'] is not None and params['display_name'] != '':
             criteria['displayName'] = {'eq': params['display_name']}
+        elif 'display_name_contains' in params and params['display_name_contains'] is not None and params['display_name_contains'] != '':
+            criteria['displayName'] = {'containsIgnoreCase': params['display_name_contains']}
             
         if 'email' in params and params['email'] is not None and params['email'] != '':
             criteria['email'] = {'eq': params['email']}
+        elif 'email_contains' in params and params['email_contains'] is not None and params['email_contains'] != '':
+            criteria['email'] = {'containsIgnoreCase': params['email_contains']}
             
         if 'is_active' in params and params['is_active'] is not None:
             criteria['active'] = {'eq': params['is_active']}
@@ -121,13 +163,13 @@ class LinearParameterAdapter:
         criteria = {}
         
         # Map parameters based on actual GraphQL fields
-        if 'teamKey' in params and params['teamKey'] is not None and params['teamKey'] != '':
-            criteria['team'] = {'key': {'eq': params['teamKey']}}
+        # Note: 'team' and 'teams' are not valid filter fields in ProjectFilter type
+        # Team filtering will be done client-side after API call
             
         if 'name' in params and params['name'] is not None and params['name'] != '':
             criteria['name'] = {'eq': params['name']}
         elif 'name_contains' in params and params['name_contains'] is not None and params['name_contains'] != '':
-            criteria['name'] = {'contains': params['name_contains']}
+            criteria['name'] = {'containsIgnoreCase': params['name_contains']}
             
         if 'state' in params and params['state'] is not None and params['state'] != '':
             criteria['state'] = {'eq': params['state']}
@@ -135,8 +177,13 @@ class LinearParameterAdapter:
         # Adjust lead_name to match the field in GraphQL query (lead.displayName)
         if 'lead_display_name' in params and params['lead_display_name'] is not None and params['lead_display_name'] != '':
             criteria['lead'] = {'displayName': {'eq': params['lead_display_name']}}
+        elif 'lead_contains' in params and params['lead_contains'] is not None and params['lead_contains'] != '':
+            criteria['lead'] = {'displayName': {'containsIgnoreCase': params['lead_contains']}}
         
-        return {'criteria': criteria}
+        # Store original teamKey parameter for client-side filtering
+        teamKey = params.get('teamKey')
+        
+        return {'criteria': criteria, 'teamKey': teamKey}
     
     @staticmethod
     def adapt_filter_cycles(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -157,6 +204,11 @@ class LinearParameterAdapter:
                 criteria['number'] = {'eq': cycle_number}
             except (ValueError, TypeError):
                 pass
+        
+        # Handle name contains (will be matched against non-GraphQL field client-side)
+        if 'name_contains' in params and params['name_contains'] is not None and params['name_contains'] != '':
+            # Store for client-side filtering, not in criteria object
+            params['client_side_name_contains'] = params['name_contains']
             
         # Handle date filters which are in the GraphQL query
         if 'starts_at' in params and params['starts_at'] is not None and params['starts_at'] != '':
@@ -170,11 +222,17 @@ class LinearParameterAdapter:
         if filter_by_start_date is None:  # If not specified, use default True
             filter_by_start_date = True
         
-        # Preserve filter_by_start_date parameter
-        return {
+        # Preserve filter_by_start_date parameter and any client-side filtering params
+        result = {
             'criteria': criteria,
             'filter_by_start_date': filter_by_start_date
         }
+        
+        # Add client_side_name_contains if present
+        if 'client_side_name_contains' in params:
+            result['client_side_name_contains'] = params['client_side_name_contains']
+            
+        return result
     
     @staticmethod
     def adapt_filter_comments(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -190,11 +248,13 @@ class LinearParameterAdapter:
             
         # Body contains is tested against body field in GraphQL
         if 'body_contains' in params and params['body_contains'] is not None and params['body_contains'] != '':
-            criteria['body'] = {'contains': params['body_contains']}
+            criteria['body'] = {'containsIgnoreCase': params['body_contains']}
             
         # User displayName is the correct field in GraphQL
         if 'user_display_name' in params and params['user_display_name'] is not None and params['user_display_name'] != '':
             criteria['user'] = {'displayName': {'eq': params['user_display_name']}}
+        elif 'user_contains' in params and params['user_contains'] is not None and params['user_contains'] != '':
+            criteria['user'] = {'displayName': {'containsIgnoreCase': params['user_contains']}}
         
         return {'criteria': criteria}
     
@@ -212,11 +272,13 @@ class LinearParameterAdapter:
             
         # Title contains will be filtered client-side
         if 'title_contains' in params and params['title_contains'] is not None and params['title_contains'] != '':
-            criteria['title'] = {'contains': params['title_contains']}
+            criteria['title'] = {'containsIgnoreCase': params['title_contains']}
             
         # Creator displayName will be filtered client-side
         if 'creator_display_name' in params and params['creator_display_name'] is not None and params['creator_display_name'] != '':
             criteria['creator'] = {'displayName': {'eq': params['creator_display_name']}}
+        elif 'creator_contains' in params and params['creator_contains'] is not None and params['creator_contains'] != '':
+            criteria['creator'] = {'displayName': {'containsIgnoreCase': params['creator_contains']}}
         
         return {'criteria': criteria}
     
@@ -226,6 +288,8 @@ class LinearParameterAdapter:
         Convert flat createIssue parameters to data object.
         Automatically looks up IDs for teamKey, assignee_name, etc.
         """
+        import logging  # Import logging at the function level to fix the error
+        
         if 'data' in params and params['data'] is not None:
             return params
             
@@ -247,7 +311,6 @@ class LinearParameterAdapter:
                 import os
                 linear_client = LinearClient(os.environ.get("LINEAR_API_KEY"))
             except Exception as e:
-                import logging
                 logging.getLogger("tools_declaration").error(f"Error initializing LinearClient: {str(e)}")
                 linear_client = None
         
@@ -278,46 +341,45 @@ class LinearParameterAdapter:
                         if team and 'id' in team:
                             data['teamId'] = team['id']
             except Exception as e:
-                import logging
                 logging.getLogger("tools_declaration").error(f"Error looking up team ID: {str(e)}")
         
         # Handle assignee_name to assigneeId conversion
         if 'assignee_name' in params and params['assignee_name'] and 'assigneeId' not in data:
             try:
-                # Try to find user through getCurrentUser first (faster)
-                if linear_client:
-                    user_info = linear_client.getCurrentUser(f"@{params['assignee_name']}")
-                    if user_info and user_info.get('linear_display_name'):
-                        # Get actual user data using team
-                        team_key = user_info.get('team')
-                        if team_key:
-                            users = linear_client.getAllUsers(team_key)
-                            user = next((u for u in users if u.get('displayName', '').lower() == 
-                                        user_info.get('linear_display_name').lower()), None)
-                            if user and 'id' in user:
-                                data['assigneeId'] = user['id']
+                # Initialize LinearClient if needed
+                if linear_client is None:
+                    from ops_linear_db.linear_client import LinearClient
+                    import os
+                    linear_client = LinearClient(os.environ.get("LINEAR_API_KEY"))
                 
-                # If not found, try scanning all teams (slower but more thorough)
-                if 'assigneeId' not in data and linear_client:
-                    teams = ["OPS", "ENG", "RES", "AI", "MKT", "PRO"]
-                    users = []
-                    
-                    for team_key in teams:
-                        try:
-                            team_users = linear_client.getAllUsers(team_key)
-                            users.extend(team_users)
-                        except:
-                            pass
-                    
-                    # Look for matching display name
-                    assignee = next((user for user in users 
-                                    if user.get('displayName', '').lower() == params['assignee_name'].lower()), None)
-                    
-                    if assignee and 'id' in assignee:
-                        data['assigneeId'] = assignee['id']
+                # First try: Use the new getUserByName function with team context
+                # For update operations, we've likely already looked up the team key
+                lookup_team_key = params.get('teamKey') or params.get('teamKey')
+                if lookup_team_key:
+                    # Look up user in the specific team first
+                    user = linear_client.getUserByName(params['assignee_name'], lookup_team_key)
+                    if user and user.get('id'):
+                        data['assigneeId'] = user.get('id')
+                        logging.getLogger("tools_declaration").info(
+                            f"Found assignee '{params['assignee_name']}' in team '{lookup_team_key}' with ID: {user.get('id')}"
+                        )
+                
+                # Second try: Use the new function without team context if not found
+                if 'assigneeId' not in data:
+                    user = linear_client.getUserByName(params['assignee_name'])
+                    if user and user.get('id'):
+                        data['assigneeId'] = user.get('id')
+                        logging.getLogger("tools_declaration").info(
+                            f"Found assignee '{params['assignee_name']}' with ID: {user.get('id')}"
+                        )
+                    else:
+                        logging.getLogger("tools_declaration").warning(
+                            f"Could not find assignee with name '{params['assignee_name']}'"
+                        )
+                
             except Exception as e:
-                import logging
                 logging.getLogger("tools_declaration").error(f"Error looking up assignee ID: {str(e)}")
+                logging.getLogger("tools_declaration").error(traceback.format_exc())
         
         # Handle state_name to stateId conversion
         if 'state_name' in params and params['state_name'] and 'stateId' not in data:
@@ -336,7 +398,6 @@ class LinearParameterAdapter:
                     if state and 'id' in state:
                         data['stateId'] = state['id']
             except Exception as e:
-                import logging
                 logging.getLogger("tools_declaration").error(f"Error looking up state ID: {str(e)}")
         
         # Handle cycle_name/cycle_number to cycleId conversion
@@ -366,7 +427,6 @@ class LinearParameterAdapter:
                     if cycle and 'id' in cycle:
                         data['cycleId'] = cycle['id']
             except Exception as e:
-                import logging
                 logging.getLogger("tools_declaration").error(f"Error looking up cycle ID: {str(e)}")
         
         # Handle project_name to projectId conversion
@@ -386,7 +446,6 @@ class LinearParameterAdapter:
                     if project and 'id' in project:
                         data['projectId'] = project['id']
             except Exception as e:
-                import logging
                 logging.getLogger("tools_declaration").error(f"Error looking up project ID: {str(e)}")
         
         # Handle label_names to labelIds conversion
@@ -411,7 +470,6 @@ class LinearParameterAdapter:
                     if label_ids:
                         data['labelIds'] = label_ids
             except Exception as e:
-                import logging
                 logging.getLogger("tools_declaration").error(f"Error looking up label IDs: {str(e)}")
         
         # Handle parent_issue_number to parentId conversion
@@ -432,7 +490,6 @@ class LinearParameterAdapter:
                 if issues and len(issues) > 0:
                     data['parentId'] = issues[0].get('id')
             except Exception as e:
-                import logging
                 logging.getLogger("tools_declaration").error(f"Error looking up parent issue ID: {str(e)}")
                 
         return {'data': data}
@@ -443,6 +500,8 @@ class LinearParameterAdapter:
         Convert flat updateIssue parameters to proper format.
         Automatically looks up IDs from names and numbers.
         """
+        import logging  # Import logging at the function level to fix the error
+        
         if 'data' in params and params['data'] is not None:
             return params
             
@@ -467,7 +526,6 @@ class LinearParameterAdapter:
                 import os
                 linear_client = LinearClient(os.environ.get("LINEAR_API_KEY"))
             except Exception as e:
-                import logging
                 logging.getLogger("tools_declaration").error(f"Error initializing LinearClient: {str(e)}")
                 linear_client = None
         
@@ -486,7 +544,6 @@ class LinearParameterAdapter:
                     if 'team' in issue and issue['team']:
                         team_key = issue['team'].get('key')
             except Exception as e:
-                import logging
                 logging.getLogger("tools_declaration").error(f"Error looking up issue ID: {str(e)}")
         
         # Fetch issue details if we have the ID but not the team key
@@ -502,46 +559,45 @@ class LinearParameterAdapter:
                     if 'team' in issue and issue['team']:
                         team_key = issue['team'].get('key')
             except Exception as e:
-                import logging
                 logging.getLogger("tools_declaration").error(f"Error fetching issue details: {str(e)}")
         
         # Handle assignee_name to assigneeId conversion
         if 'assignee_name' in params and params['assignee_name'] and 'assigneeId' not in data:
             try:
-                # Try to find user through getCurrentUser first (faster)
-                if linear_client:
-                    user_info = linear_client.getCurrentUser(f"@{params['assignee_name']}")
-                    if user_info and user_info.get('linear_display_name'):
-                        # Get actual user data using team
-                        assigned_team_key = user_info.get('team')
-                        if assigned_team_key:
-                            users = linear_client.getAllUsers(assigned_team_key)
-                            user = next((u for u in users if u.get('displayName', '').lower() == 
-                                        user_info.get('linear_display_name').lower()), None)
-                            if user and 'id' in user:
-                                data['assigneeId'] = user['id']
+                # Initialize LinearClient if needed
+                if linear_client is None:
+                    from ops_linear_db.linear_client import LinearClient
+                    import os
+                    linear_client = LinearClient(os.environ.get("LINEAR_API_KEY"))
                 
-                # If not found, try scanning all teams (slower but more thorough)
-                if 'assigneeId' not in data and linear_client:
-                    teams = ["OPS", "ENG", "RES", "AI", "MKT", "PRO"]
-                    users = []
-                    
-                    for scan_team_key in teams:
-                        try:
-                            team_users = linear_client.getAllUsers(scan_team_key)
-                            users.extend(team_users)
-                        except:
-                            pass
-                    
-                    # Look for matching display name
-                    assignee = next((user for user in users 
-                                    if user.get('displayName', '').lower() == params['assignee_name'].lower()), None)
-                    
-                    if assignee and 'id' in assignee:
-                        data['assigneeId'] = assignee['id']
+                # First try: Use the new getUserByName function with team context
+                # For update operations, we've likely already looked up the team key
+                lookup_team_key = team_key or params.get('teamKey')
+                if lookup_team_key:
+                    # Look up user in the specific team first
+                    user = linear_client.getUserByName(params['assignee_name'], lookup_team_key)
+                    if user and user.get('id'):
+                        data['assigneeId'] = user.get('id')
+                        logging.getLogger("tools_declaration").info(
+                            f"Found assignee '{params['assignee_name']}' in team '{lookup_team_key}' with ID: {user.get('id')}"
+                        )
+                
+                # Second try: Use the new function without team context if not found
+                if 'assigneeId' not in data:
+                    user = linear_client.getUserByName(params['assignee_name'])
+                    if user and user.get('id'):
+                        data['assigneeId'] = user.get('id')
+                        logging.getLogger("tools_declaration").info(
+                            f"Found assignee '{params['assignee_name']}' with ID: {user.get('id')}"
+                        )
+                    else:
+                        logging.getLogger("tools_declaration").warning(
+                            f"Could not find assignee with name '{params['assignee_name']}'"
+                        )
+                
             except Exception as e:
-                import logging
                 logging.getLogger("tools_declaration").error(f"Error looking up assignee ID: {str(e)}")
+                logging.getLogger("tools_declaration").error(traceback.format_exc())
         
         # Handle state_name to stateId conversion
         if 'state_name' in params and params['state_name'] and 'stateId' not in data:
@@ -557,7 +613,6 @@ class LinearParameterAdapter:
                     if state and 'id' in state:
                         data['stateId'] = state['id']
             except Exception as e:
-                import logging
                 logging.getLogger("tools_declaration").error(f"Error looking up state ID: {str(e)}")
         
         # Handle cycle_name/cycle_number to cycleId conversion
@@ -583,7 +638,6 @@ class LinearParameterAdapter:
                     if cycle and 'id' in cycle:
                         data['cycleId'] = cycle['id']
             except Exception as e:
-                import logging
                 logging.getLogger("tools_declaration").error(f"Error looking up cycle ID: {str(e)}")
         
         # Handle project_name to projectId conversion
@@ -600,7 +654,6 @@ class LinearParameterAdapter:
                     if project and 'id' in project:
                         data['projectId'] = project['id']
             except Exception as e:
-                import logging
                 logging.getLogger("tools_declaration").error(f"Error looking up project ID: {str(e)}")
         
         # Handle label_names to labelIds conversion
@@ -622,7 +675,6 @@ class LinearParameterAdapter:
                     if label_ids:
                         data['labelIds'] = label_ids
             except Exception as e:
-                import logging
                 logging.getLogger("tools_declaration").error(f"Error looking up label IDs: {str(e)}")
         
         # Handle parent_issue_number to parentId conversion
@@ -643,7 +695,6 @@ class LinearParameterAdapter:
                     if issues and len(issues) > 0:
                         data['parentId'] = issues[0].get('id')
             except Exception as e:
-                import logging
                 logging.getLogger("tools_declaration").error(f"Error looking up parent issue ID: {str(e)}")
                 
         return {'issueId': issue_id, 'data': data}
@@ -652,38 +703,60 @@ class LinearParameterAdapter:
     def adapt_create_comment(params: Dict[str, Any]) -> Dict[str, Any]:
         """
         Convert flat createComment parameters to proper format.
-        Automatically looks up issue ID from issue number.
+        Automatically looks up issue ID from issue number and team key.
         """
-        if 'commentData' in params and params['commentData'] is not None:
-            return params
+        import logging  # Import logging at the function level to fix the error
+        logger = logging.getLogger("tools_declaration")
+        
+        # If issue_id is already provided, use it directly
+        if 'issue_id' in params or 'issueId' in params:
+            issue_id = params.get('issue_id') or params.get('issueId')
+            comment_data = params.get('commentData', {})
+            if 'body' in params:
+                comment_data['body'] = params['body']
+            return {'issue_id': issue_id, 'commentData': comment_data}
             
-        issueNumber = params.get('issueNumber') or params.get('issue_number')
-        issue_id = params.get('issue_id') or params.get('issueId')
-        commentData = {}
-        linear_client = None
+        # Extract issue number and team key
+        issue_number = params.get('issue_number') or params.get('issueNumber')
+        team_key = params.get('team_key') or params.get('teamKey')
         
-        # Extract comment body
+        # Extract comment data
+        comment_data = {}
         if 'body' in params:
-            commentData['body'] = params['body']
+            comment_data['body'] = params['body']
+        elif 'commentData' in params and isinstance(params['commentData'], dict):
+            comment_data = params['commentData']
         
-        # Look up the issue ID from the issue number if we don't already have it
-        if not issue_id and issueNumber:
+        # If we have both issue number and team key, look up the issue ID
+        if issue_number and team_key:
             try:
                 from ops_linear_db.linear_client import LinearClient
-                import os
-                linear_client = LinearClient(os.environ.get("LINEAR_API_KEY"))
+                # Get a linear client instance
+                if hasattr(LinearParameterAdapter, 'linear_client') and LinearParameterAdapter.linear_client:
+                    linear_client = LinearParameterAdapter.linear_client
+                else:
+                    linear_api_key = os.getenv("LINEAR_API_KEY")
+                    linear_client = LinearClient(linear_api_key)
+                    LinearParameterAdapter.linear_client = linear_client
                 
-                # Find the issue by number
-                issue_criteria = {"number": {"eq": issueNumber}}
-                issues = linear_client.filterIssues(issue_criteria)
+                # Look up the issue ID using filterIssues
+                criteria = {
+                    "team": {"key": {"eq": team_key}},
+                    "number": {"eq": issue_number}
+                }
+                issues = linear_client.filterIssues(criteria, limit=1)
                 
                 if issues and len(issues) > 0:
-                    issue_id = issues[0].get('id')
+                    issue_id = issues[0].get("id")
+                    logger.info(f"Found issue ID {issue_id} for issue #{issue_number} in team {team_key}")
+                    return {'issue_id': issue_id, 'commentData': comment_data}
+                else:
+                    logger.warning(f"Issue #{issue_number} not found in team {team_key}")
             except Exception as e:
-                import logging
-                logging.getLogger("tools_declaration").error(f"Error looking up issue ID: {str(e)}")
-            
-        return {'issueNumber': issueNumber, 'issue_id': issue_id, 'commentData': commentData}
+                logger.error(f"Error looking up issue ID: {str(e)}")
+                
+        # Fallback: return parameters as provided
+        return params
     
     @staticmethod
     def adapt_create_attachment(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -691,6 +764,8 @@ class LinearParameterAdapter:
         Convert flat createAttachment parameters to proper format.
         Automatically looks up issue ID from issue number.
         """
+        import logging  # Import logging at the function level to fix the error
+        
         if 'attachmentData' in params and params['attachmentData'] is not None:
             return params
             
@@ -718,7 +793,6 @@ class LinearParameterAdapter:
                 if issues and len(issues) > 0:
                     issue_id = issues[0].get('id')
             except Exception as e:
-                import logging
                 logging.getLogger("tools_declaration").error(f"Error looking up issue ID: {str(e)}")
                 
         return {'issueNumber': issueNumber, 'issueId': issue_id, 'attachmentData': attachmentData}
@@ -834,6 +908,8 @@ class LinearTools:
         return self.client.getAllStates(teamKey)
     
     def getCurrentUser(self, slack_display_name: str) -> dict:
+        if "@" not in slack_display_name:
+            slack_display_name = "@" + slack_display_name
         """Get information about a specific user by their Slack display name"""
         self._check_client()
         return self.client.getCurrentUser(slack_display_name)
@@ -890,10 +966,18 @@ class LinearTools:
     
     # Filter methods
     @adapt_parameters(LinearParameterAdapter.adapt_filter_issues)
-    def filterIssues(self, criteria: dict = None, limit: int = None, **kwargs) -> List[dict]:
-        """Filter issues by criteria or individual parameters"""
+    def filterIssues(self, criteria: dict = None, limit: int = None, include_description: bool = True, **kwargs) -> List[dict]:
+        """
+        Filter issues by criteria or individual parameters
+        
+        Args:
+            criteria: Dictionary of filter criteria
+            limit: Maximum number of issues to return
+            include_description: If False, strip description field from results
+            **kwargs: Additional filter parameters
+        """
         self._check_client()
-        return self.client.filterIssues(criteria, limit)
+        return self.client.filterIssues(criteria, limit, include_description)
     
     @adapt_parameters(LinearParameterAdapter.adapt_filter_users)
     def filterUsers(self, criteria: dict = None, **kwargs) -> List[dict]:
@@ -902,16 +986,57 @@ class LinearTools:
         return self.client.filterUsers(criteria)
     
     @adapt_parameters(LinearParameterAdapter.adapt_filter_projects)
-    def filterProjects(self, criteria: dict = None, **kwargs) -> List[dict]:
-        """Filter projects by criteria or individual parameters"""
+    def filterProjects(self, criteria: dict = None, teamKey: str = None, **kwargs) -> List[dict]:
+        """
+        Filter projects by criteria or individual parameters
+        
+        Args:
+            criteria: Dictionary of filter criteria
+            teamKey: Team key to filter by (client-side filtering)
+            **kwargs: Additional filter parameters
+        
+        Returns:
+            List of matching project objects
+        """
         self._check_client()
-        return self.client.filterProjects(criteria)
+        
+        # Get projects based on supported API filters
+        projects = self.client.filterProjects(criteria)
+        
+        # If teamKey is provided, filter by team client-side
+        if teamKey:
+            filtered_projects = []
+            for project in projects:
+                teams = project.get("teams", {}).get("nodes", [])
+                if any(team.get("key") == teamKey for team in teams):
+                    filtered_projects.append(project)
+            return filtered_projects
+            
+        return projects
     
     @adapt_parameters(LinearParameterAdapter.adapt_filter_cycles)
-    def filterCycles(self, criteria: dict = None, filter_by_start_date: bool = True, **kwargs) -> List[dict]:
-        """Filter cycles by criteria or individual parameters"""
+    def filterCycles(self, criteria: dict = None, filter_by_start_date: bool = True, client_side_name_contains: str = None, **kwargs) -> List[dict]:
+        """
+        Filter cycles by criteria or individual parameters
+        
+        Args:
+            criteria: Dictionary of filter criteria
+            filter_by_start_date: Whether to filter by start date
+            client_side_name_contains: String to search for in cycle names (client-side filtering)
+            **kwargs: Additional filter parameters
+        """
         self._check_client()
-        return self.client.filterCycles(criteria, filter_by_start_date)
+        cycles = self.client.filterCycles(criteria, filter_by_start_date)
+        
+        # Apply client-side name filtering if specified
+        if client_side_name_contains:
+            filtered_cycles = []
+            for cycle in cycles:
+                if cycle.get('name') and client_side_name_contains.lower() in cycle.get('name').lower():
+                    filtered_cycles.append(cycle)
+            return filtered_cycles
+            
+        return cycles
     
     @adapt_parameters(LinearParameterAdapter.adapt_filter_comments)
     def filterComments(self, criteria: dict = None, **kwargs) -> List[dict]:
@@ -949,17 +1074,69 @@ class LinearTools:
             raise ValueError("Either issue_id or issueNumber must be provided")
     
     @adapt_parameters(LinearParameterAdapter.adapt_create_comment)
-    def createComment(self, issueNumber: int = None, issue_id: str = None, commentData: dict = None, **kwargs) -> dict:
-        """Add a comment to an issue"""
-        self._check_client()
+    def createComment(self, issueNumber: int = None, issue_number: int = None, issue_id: str = None, id: str = None, 
+                    teamKey: str = None, team_key: str = None, commentData: dict = None, input: dict = None, **kwargs) -> dict:
+        """
+        Add a comment to an issue
         
-        # Use issue_id if provided, otherwise use issueNumber
-        if issue_id:
-            return self.client.createCommentById(issue_id, commentData)
-        elif issueNumber:
-            return self.client.createComment(issueNumber, commentData)
-        else:
-            raise ValueError("Either issue_id or issueNumber must be provided")
+        Args:
+            issue_id: The UUID of the issue
+            issueNumber: Issue number (requires team_key to resolve ID)
+            issue_number: Alternative name for issueNumber
+            teamKey: Team key for resolving issue ID (required if using issue_number)
+            team_key: Alternative name for teamKey
+            commentData: Comment data dictionary containing body
+            input: Alternative name for commentData
+            
+        Returns:
+            Created comment object
+            
+        Raises:
+            ValueError: If required parameters are missing
+        """
+        self._check_client()
+        import logging
+        logger = logging.getLogger("linear_tools")
+        
+        # Handle parameters that could come from adapter
+        comment_data = input or commentData or {}
+        issue_id_param = id or issue_id
+        
+        # If issue_id is provided, use it directly
+        if issue_id_param:
+            return self.client.createCommentById(issue_id_param, comment_data)
+            
+        # If we have issue number and team key, resolve the issue ID first
+        issue_num = issueNumber or issue_number
+        team_k = teamKey or team_key
+        
+        if issue_num and team_k:
+            try:
+                # Search for the issue to get its ID
+                criteria = {
+                    "team": {"key": {"eq": team_k}},
+                    "number": {"eq": issue_num}
+                }
+                issues = self.client.filterIssues(criteria, limit=1)
+                
+                if issues and len(issues) > 0:
+                    resolved_issue_id = issues[0].get("id")
+                    logger.info(f"Resolved issue ID {resolved_issue_id} from #{issue_num} in team {team_k}")
+                    
+                    # Use the resolved ID to create the comment
+                    return self.client.createCommentById(resolved_issue_id, comment_data)
+                else:
+                    raise ValueError(f"Issue #{issue_num} not found in team {team_k}")
+            except Exception as e:
+                raise ValueError(f"Error resolving issue ID: {str(e)}")
+        
+        # Backward compatibility - try with just issue number, but log a warning
+        elif issue_num:
+            logger.warning(f"Creating comment for issue #{issue_num} without team key is not recommended")
+            return self.client.createComment(issue_num, comment_data)
+            
+        # If we get here, we don't have enough information
+        raise ValueError("Either issue_id or both issue_number and team_key must be provided")
     
     @adapt_parameters(LinearParameterAdapter.adapt_create_attachment)
     def createAttachment(self, issueNumber: int = None, attachmentData: dict = None, **kwargs) -> dict:

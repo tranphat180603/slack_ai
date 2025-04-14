@@ -6,14 +6,14 @@ linear_tools:
         inputs:
           team_key: "The team key where the issue will be created (enum: ENG, OPS, RES, AI, MKT, PRO)"
           title: "Title of the issue"
-          description: "Markdown description of the issue"
+          description: "Markdown description of the issue (always try to enhance or groom the description before creating the issue. As detailed as possible)"
           priority: "Priority level (0.0: None, 1.0: Urgent, 2.0: High, 3.0: Medium, 4.0: Low)"
-          estimate: "Estimate points for the issue"
+          estimate: "Estimate points for the issue (1-7)"
           assignee_name: "Display name of the user to assign the issue to"
           state_name: "Name of the workflow state (e.g. 'Todo', 'In Progress', 'Done')"
           label_names: "List of label names to apply to the issue"
           project_name: "Name of the project to add the issue to"
-          cycle_name: "Name of the cycle to add the issue to"
+          cycle_name: "Name of the cycle to add the issue to (must always be the current cycle of the correct team)"
           parent_issue_number: "Issue number of the parent issue"
         outputs: Created issue details
         required_inputs:
@@ -21,25 +21,37 @@ linear_tools:
           - title
 
       - name: updateIssue
-        description: GraphQL-based function to update an existing issue in Linear. This should only be executed after having detected which specific issue is going to be updated with the context gathered.
+        description: "GraphQL-based function to update an existing issue in Linear. This should only be executed after having detected which specific issue (and the issue number) is going to be updated with the context gathered. Whatever you do, must filter and get the exact content exists in the issue before updating it."
         inputs:
           issue_number: "The number of the issue to update"
-          title: "New title for the issue"
-          description: "New markdown description for the issue"
+          title: "New title for the issue. If not changed, must repeat the old title. Do not leave it blank."
+          description: "New markdown description for the issue. If not changed, must repeat the old description. Always try to groom the description carefully if the user requests."
           priority: "New priority level (0.0: None, 1.0: Urgent, 2.0: High, 3.0: Medium, 4.0: Low)"
-          estimate: "New estimate points"
+          estimate: "New estimate points (1-7)"
           assignee_name: "Display name of the user to reassign to"
-          state_name: "New workflow state name"
-          label_names: "New list of label names"
+          state_name: "New workflow state name (e.g. 'Todo', 'In Progress', 'Done')"
+          label_names: "New list of label names (search for labels using the getAllLabels function)"
           project_name: "Name of the project to move the issue to"
-          cycle_name: "Name of the cycle to move the issue to"
+          cycle_name: "Name of the cycle to move the issue to (must always be the current cycle of the correct team)"
           parent_issue_number: "Issue number of the new parent issue"
           archived: "Whether to archive the issue"
         outputs: Updated issue details
         required_inputs:
           - issue_number
 
-  - category: "EXPLORE: Low-effort functions that are used to explore how data on Linear looks like. You can just randomly fill in the inputs in the enum fields to see what data you can get."
+      - name: createComment
+        description: "GraphQL-based function to create a new comment on an issue. This should only be executed after having detected which specific issue (and the issue number) is going to be commented on with the context gathered. Whatever you do, must filter and get the exact content exists in the issue before commenting on it."
+        inputs:
+          issueNumber: "The number of the issue to comment on"
+          commentData: "The comment data to create"
+          teamKey: "The team key to comment on (enum: ENG, OPS, RES, AI, MKT, PRO)"
+        outputs: Created comment details
+        required_inputs:
+          - commentData
+          - issueNumber
+          - teamKey
+
+  - category: "EXPLORE: Low-effort functions that are used to explore how data on Linear looks like. You can just randomly fill in the inputs in the enum fields to see what data you can get. Always prioritize to use functions inside this section first before using the other sections."
     tools:
       - name: getUserMessageByNumber
         description: Retrieves the N most recent user messages from the current conversation thread. This is useful when you need to get the precise wording of recent messages, especially for long texts or when creating issues/tickets.
@@ -66,7 +78,7 @@ linear_tools:
           - slack_display_name
 
       - name: getAllCycles
-        description: GraphQL-based function to get all cycles up to the current cycle in a specified Linear team. The largest cycle number is the current cycle and the rest are past cycles in chronological order.
+        description: "GraphQL-based function to get all cycles up to the current cycle in a specified Linear team. The largest cycle number is the current cycle and the rest are past cycles in chronological order. Note: each team has different cycle numbers, make sure to use the correct team key for whatever the user's request is."
         inputs:
           team_key: "The team key to get cycles from (enum: ENG, OPS, RES, AI, MKT, PRO)"
         outputs: "Array of cycle objects with metadata"
@@ -89,14 +101,22 @@ linear_tools:
         required_inputs:
           - team_key
 
+      - name: getAllTeams
+        description: GraphQL-based function to get all teams in Linear
+        inputs: None
+        outputs: "Array of team objects with metadata"
+        required_inputs: None
+
   - category: "FILTER: High-effort functions used to filter and select better results but comes at a cost of more required inputs. Always try to gather as much data as you can before using these functions."
     tools:
       - name: filterIssues
         description: GraphQL-based function to filter Linear issues based on various criteria such as state, priority, assignee, etc.
         inputs:
           team_key: "The team key to filter issues by (enum: ENG, OPS, RES, AI, MKT, PRO)"
+          issue_number: "Filter by specific issue number. Note: Issue numbers are only unique within a team, so it's recommended to use with teamKey."
           state: "Filter by issue state (e.g. 'In Progress', 'Todo', 'Done')"
           priority: "Filter by priority level (0.0: None, 1.0: Urgent, 2.0: High, 3.0: Medium, 4.0: Low)"
+          estimate: "Filter by estimate points (1-7) hours."
           assignee_name: "Filter by assignee's display name (exact match)"
           assignee_contains: "Filter by assignee names containing this text (case-insensitive)"
           title_contains: "Filter issues where title contains this string"
@@ -104,7 +124,8 @@ linear_tools:
           cycle_number: "Filter by cycle number (numeric identifier)"
           project_id: "Filter by project ID"
           label_name: "Filter by label name"
-          first: "Limit the number of issues returned"
+          first: "Limit the number of issues returned. Determine a reasonable number of this to satisfy the user's request."
+          include_description: "Whether to include the description field in the results. Set to False most of the time. Just set the True if users request details about the issue."
         outputs: "Array of matching issues with metadata"
         required_inputs:
           - team_key
@@ -119,16 +140,6 @@ linear_tools:
         required_inputs:
           - issue_number
 
-      - name: filterAttachments
-        description: GraphQL-based function to filter attachments in Linear based on various criteria
-        inputs:
-          issue_number: "Filter attachments by issue number"
-          title_contains: "Filter attachments where title contains this string"
-          creator_display_name: "Filter attachments by creator display name"
-        outputs: "Array of matching attachments"
-        required_inputs:
-          - issue_number
-
       - name: filterProjects
         description: GraphQL-based function to filter projects in Linear based on various criteria
         inputs:
@@ -138,17 +149,6 @@ linear_tools:
           state: "Filter by project state (e.g. 'planned', 'started', 'completed')"
           lead_display_name: "Filter by project lead's display name"
         outputs: "Array of matching project objects"
-        required_inputs: []
-
-      - name: filterCycles
-        description: GraphQL-based function to filter cycles in Linear based on various criteria
-        inputs:
-          team_key: "Filter cycles by team key (enum: ENG, OPS, RES, AI, MKT, PRO)"
-          number: "Filter by cycle number (numeric identifier)"
-          starts_at: "Filter by cycle start date (format: YYYY-MM-DD)"
-          ends_at: "Filter by cycle end date (format: YYYY-MM-DD)"
-          filter_by_start_date: "Whether to only include cycles that have started"
-        outputs: "Array of matching cycle objects"
         required_inputs: []
 
       - name: semantic_search_linear
@@ -179,7 +179,7 @@ slack_tools:
           - channel_id
 
       - name: get_users
-        description: Get user information for every employee in the company or a specific employee
+        description: "Get user information for every employee in the company or a specific employee. By providing their display name, you can get the user's information. Or return all users if no display name is provided."
         inputs:
           display_name: "The display name of the employee to search for (e.g. '@username')"
         outputs: "Array of Slack user objects with metadata"

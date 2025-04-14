@@ -42,7 +42,7 @@ SEARCH_CHANNEL_HISTORY_SCHEMA = {
 GET_USERS_SCHEMA = {
     "type": "function",
     "name": "get_users",
-    "description": "Get user information for every employees in the company or a specific employee. Leave parameters empty or omit them entirely rather than providing zero, empty string, or null values.",
+    "description": "Get user information for every employees in the company or a specific employee. By providing their display name, you can get the user's information. Or return all users if no display name is provided.",
     "parameters": {
         "type": "object",
         "properties": {

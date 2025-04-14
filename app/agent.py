@@ -5,8 +5,9 @@ import dotenv
 import yaml
 import time
 from typing import Dict, List, Any, Optional, Union
+import re
 
-from llm.openai_client import OpenaiClient
+from llm.openai_client import OpenaiClient, CancellableOpenAIClient, CancellationError
 from tools import LINEAR_SCHEMAS, SLACK_SCHEMAS, SEMANTIC_SEARCH_SCHEMAS
 
 # Configure logger
@@ -120,11 +121,15 @@ class APICallTracker:
 api_call_tracker = APICallTracker()
 
 class Commander:
-    def __init__(self, model: str, prompts: Dict = None):
+    def __init__(self, model: str, prompts: Dict = None, context_id: str = None):
         self.model = model
-        self.client = OpenaiClient(os.getenv("OPENAI_API_KEY"), model=model)
+        self.client = CancellableOpenAIClient(os.getenv("OPENAI_API_KEY"), model=model, context_id=context_id)
         self.prompts = prompts or {}
         logger.info(f"Commander initialized with model {model}")
+
+    def set_context_id(self, context_id: str):
+        """Set the context ID for cancellation checks."""
+        self.client.set_context_id(context_id)
 
     def format_prompt(self, prompt_name: str, prompt_vars: Dict[str, Any]) -> Dict[str, str]:
         """Format a prompt template with provided variables."""
@@ -181,8 +186,15 @@ class Commander:
             "user": formatted_user
         }
 
-    def assign_tasks(self, user_query: str, history: Union[List[Dict], str] = None) -> Dict[str, Any]:
-        """Assign tasks between different platforms based on user query"""
+    def assign_tasks(self, user_query: str, history: Union[List[Dict], str] = None, image_data: str = None, image_context: str = None) -> Dict[str, Any]:
+        """Assign tasks between different platforms based on user query
+        
+        Parameters:
+            user_query (str): The user's request
+            history (Union[List[Dict], str], optional): Conversation history
+            image_data (str, optional): Base64-encoded image data for vision models
+            image_context (str, optional): Pre-analyzed image context (if already analyzed)
+        """
         logger.debug(f"[Commander] assign_tasks called with query: {user_query}")
         
         start_time = time.time()
@@ -197,70 +209,178 @@ class Commander:
                 # If history is already a string, use it directly
                 history_text = history
         
+        # If image data is provided but no pre-analyzed context, analyze it
+        if image_data and not image_context:
+            logger.info("[Commander] Image data provided but no pre-analyzed context")
+            image_context = self.analyze_image(image_data)
+        
         # Prepare prompt variables
         prompt_vars = {
             "user_query": user_query,
             "history": history_text
         }
         
+        # Add image context if available
+        if image_context:
+            prompt_vars["image_context"] = image_context
+            logger.debug(f"[Commander] Added image_context to prompt variables: {image_context[:100]}...")
+        else:
+            logger.debug("[Commander] No image_context available for prompt")
+        
         # Format the prompt using template
         formatted = self.format_prompt("commander.assign_tasks", prompt_vars)
         
-        # Get response from LLM based on model type
-        if self.model.startswith("gpt"):
-            # Log the final prompt sent to the API
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"[Commander] Sending prompt to API for assign_tasks:\nSystem: {formatted['system']}\nUser: {formatted['user']}")
-            
-            response = self.client.response(
-                prompt=formatted["user"], 
-                system_prompt=formatted["system"]
-            )
-        elif self.model.startswith("o"):
-            # For response_reasoning, combine system_template and user_template
-            combined_prompt = formatted["system"] + "\n\n" + formatted["user"]
-            
-            # Log the final prompt sent to the API
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"[Commander] Sending prompt to API for assign_tasks:\n{combined_prompt}")
-            
-            response = self.client.response_reasoning(
-                prompt=combined_prompt,
-                reasoning_effort="high"
-            )
-        else:
-            # Default to response method
-            # Log the final prompt sent to the API
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"[Commander] Sending prompt to API for assign_tasks:\nSystem: {formatted['system']}\nUser: {formatted['user']}")
-            
-            response = self.client.response(
-                prompt=formatted["user"], 
-                system_prompt=formatted["system"]
-            )
-        
-        # Calculate execution time
-        execution_time = time.time() - start_time
-        
-        # Track API call
-        api_call_tracker.track_call("Commander", "assign_tasks", execution_time)
-        
-        # Log the response from the API
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"[Commander] API response for assign_tasks: {json.dumps(json.loads(response), indent=2, ensure_ascii=False)}")
-        
-        # Parse JSON response
         try:
-            result = json.loads(response)
-            return result
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON from Commander response: {e}")
-            # Fallback to direct response
+            # Get response from LLM based on model type
+            if self.model.startswith("gpt"):
+                # Log the final prompt sent to the API
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"[Commander] Sending prompt to API for assign_tasks:\nSystem: {formatted['system']}\nUser: {formatted['user']}")
+                
+                response = self.client.response(
+                    prompt=formatted["user"], 
+                    system_prompt=formatted["system"]
+                )
+            elif self.model.startswith("o"):
+                # For Claude models, combine system_template and user_template
+                combined_prompt = ""
+                if formatted["system"]:
+                    combined_prompt = formatted["system"] + "\n\n"
+                combined_prompt += formatted["user"]
+                
+                # Log the final prompt sent to the API
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"[Commander] Sending prompt to API for assign_tasks:\n{combined_prompt}")
+                
+                # Check if we have image context but can't use it with reasoning models
+                if image_data and image_context:
+                    logger.info(f"[Commander] Adding image context directly to prompt for image model")
+                    
+                    # First, check if the Mustache template is in the prompt
+                    template_pattern = r"{{#image_context}}\s*Image analysis:.*?{{/image_context}}"
+                    if re.search(template_pattern, combined_prompt, re.DOTALL):
+                        # Replace the entire Mustache block with the content
+                        combined_prompt = re.sub(
+                            template_pattern, 
+                            f"Image analysis: {image_context}",
+                            combined_prompt,
+                            flags=re.DOTALL
+                        )
+                        logger.debug(f"[Commander] Replaced Mustache template with image context")
+                    else:
+                        # If template not found, just append the image context to the end
+                        combined_prompt += f"\n\nImage analysis: {image_context}"
+                        logger.debug(f"[Commander] Appended image context to prompt")
+                        
+                    # Log a sample of the final prompt
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(f"[Commander] Final combined prompt with image: {combined_prompt[:300]}...")
+                elif image_context:
+                    # We have image context but no image data (shouldn't happen)
+                    logger.warning(f"[Commander] Have image_context but no image_data, this is unexpected")
+                
+                # Note: Cannot support images with reasoning models
+                response = self.client.response_reasoning(
+                    prompt=combined_prompt,
+                    reasoning_effort="high"
+                )
+            else:
+                # Default to response method
+                # Log the final prompt sent to the API
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"[Commander] Sending prompt to API for assign_tasks:\nSystem: {formatted['system']}\nUser: {formatted['user']}")
+                
+                response = self.client.response(
+                    prompt=formatted["user"], 
+                    system_prompt=formatted["system"]
+                )
+                
+
+                if (response.startswith("```json")):
+                    response = response.replace("```json", "").replace("```", "")
+
+            # Calculate execution time
+            execution_time = time.time() - start_time
+            
+            # Track API call
+            api_call_tracker.track_call("Commander", "assign_tasks", execution_time)
+            
+            # Log the response from the API
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"[Commander] API response for assign_tasks: {response}")
+            
+            # Parse JSON response with more robust error handling
+            try:
+                # First, clean up the response from any markdown formatting
+                if response.startswith("```json"):
+                    response = response.replace("```json", "").replace("```", "").strip()
+                elif response.startswith("```"):
+                    response = response.replace("```", "").strip()
+                    
+                # Try to find JSON content if response has additional text
+                if not response.startswith("{") and "{" in response:
+                    # Try to extract JSON from the response
+                    json_start = response.find("{")
+                    json_end = response.rfind("}") + 1
+                    if json_start >= 0 and json_end > json_start:
+                        potential_json = response[json_start:json_end]
+                        try:
+                            result = json.loads(potential_json)
+                            logger.info(f"[Commander] Successfully extracted JSON from mixed response")
+                            return result
+                        except json.JSONDecodeError:
+                            logger.warning(f"[Commander] Failed to extract valid JSON from response")
+                
+                # If we reach here, try to parse the entire response as JSON
+                result = json.loads(response)
+                return result
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse JSON from Commander response: {e}")
+                logger.error(f"Response was: {response[:200]}...")  # Log part of the response for debugging
+                
+                # Try to salvage the situation by extracting meaningful text
+                try:
+                    # For direct text responses that aren't JSON, create a response object
+                    cleaned_text = response.replace("```", "").strip()
+                    return {
+                        "order": user_query,
+                        "platform": [],
+                        "direct_response": cleaned_text or "I'm having trouble processing your request. Could you please rephrase or provide more details?"
+                    }
+                except Exception as inner_e:
+                    logger.error(f"Even fallback parsing failed: {inner_e}")
+                    # Final fallback response
+                    return {
+                        "order": user_query,
+                        "platform": [],
+                        "direct_response": "I'm having trouble processing your request. Could you please rephrase or provide more details?"
+                    }
+        except CancellationError:
+            logger.info("[Commander] assign_tasks was cancelled")
             return {
                 "order": user_query,
                 "platform": [],
-                "direct_response": "I'm having trouble processing your request. Could you please rephrase or provide more details?"
+                "direct_response": "I had to stop processing your request because you asked me to stop."
             }
+        except Exception as e:
+            logger.error(f"Failed to get Commander response: {e}")
+            # Try to salvage the situation by extracting meaningful text
+            try:
+                # For direct text responses that aren't JSON, create a response object
+                cleaned_text = response.replace("```", "").strip()
+                return {
+                    "order": user_query,
+                    "platform": [],
+                    "direct_response": cleaned_text or "I'm having trouble processing your request. Could you please rephrase or provide more details?"
+                }
+            except Exception as inner_e:
+                logger.error(f"Even fallback parsing failed: {inner_e}")
+                # Final fallback response
+                return {
+                    "order": user_query,
+                    "platform": [],
+                    "direct_response": "I'm having trouble processing your request. Could you please rephrase or provide more details?"
+                }
 
     def format_slack_message(self, message: str) -> str:
         """
@@ -374,15 +494,38 @@ class Commander:
         return message
 
     def response(self, order: str, execution_results: Dict[str, Any]) -> str:
-        """Generate a response based on execution results"""
+        """Generate a response based on execution results
+        
+        Parameters:
+            order (str): The original user request
+            execution_results (Dict[str, Any]): Results from function executions
+        """
         logger.debug(f"[Commander] response generation called with order: {order}")
 
         start_time = time.time()
         
+        # Check for Linear functions that require approval
+        linear_approval_functions = ["createIssue", "updateIssue"]
+        needs_approval = False
+        
+        for func_name, result in execution_results.items():
+            if func_name in linear_approval_functions:
+                # Mark this function as requiring approval
+                logger.info(f"[Commander] Identified {func_name} that requires approval")
+                execution_results[func_name] = {
+                    "function": func_name,
+                    "parameters": result.get("parameters", {}),
+                    "result": None,
+                    "requires_modal_approval": True,
+                    "description": f"Waiting for approval to {func_name}"
+                }
+                needs_approval = True
+        
         # Prepare prompt variables
         prompt_vars = {
             "order": order,
-            "execution_results": json.dumps(execution_results, indent=2)
+            "execution_results": json.dumps(execution_results, indent=2),
+            "needs_approval": needs_approval
         }
         
         # Format the prompt using template
@@ -390,42 +533,116 @@ class Commander:
         
         # Create a new OpenaiClient with gpt-4o-mini model specifically for this response
         from llm.openai_client import OpenaiClient
-        gpt4o_mini_client = OpenaiClient(os.getenv("OPENAI_API_KEY"), model="gpt-4o-mini")
+        response_client = OpenaiClient(os.getenv("OPENAI_API_KEY"), model="gpt-4o")
         
         # Log the final prompt sent to the API
         if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"[Commander] Sending prompt to API for response using gpt-4o-mini:\nSystem: {formatted['system']}\nUser: {formatted['user']}")
+            logger.debug(f"[Commander] Sending prompt to API for response using gpt-4o:\nSystem: {formatted['system']}\nUser: {formatted['user']}")
         
-        # Always use the response function with the new client
-        response = gpt4o_mini_client.response(
-            prompt=formatted["user"], 
-            system_prompt=formatted["system"]
-        )
-        
-        # Calculate execution time
-        execution_time = time.time() - start_time
-        
-        # Track API call
-        api_call_tracker.track_call("Commander", "response", execution_time)
-        
-        # Log the response from the API
-        if logger.isEnabledFor(logging.DEBUG):
-            # For the final response, we don't need to parse it as JSON since it's a plain string
-            logger.debug(f"[Commander] API response for final response: {response}")
+        try:
+            # Always use the response function with the new client
+            response = response_client.response(
+                prompt=formatted["user"], 
+                system_prompt=formatted["system"]
+            )
             
-        # Format the response for Slack before returning
-        formatted_response = self.format_slack_message(response)
+            # Calculate execution time
+            execution_time = time.time() - start_time
+            
+            # Track API call
+            api_call_tracker.track_call("Commander", "response", execution_time)
+            
+            # Log the response from the API
+            if logger.isEnabledFor(logging.DEBUG):
+                # For the final response, we don't need to parse it as JSON since it's a plain string
+                logger.debug(f"[Commander] API response for final response: {response}")
+                
+            # Format the response for Slack before returning
+            formatted_response = self.format_slack_message(response)
+            
+            # If needs approval, add mention to end of response if not already there
+            if needs_approval and "approval" not in formatted_response.lower():
+                formatted_response += "\n\n_Note: I've prepared a Linear action that requires your approval. Please review the form when it appears._"
+            
+            return formatted_response
+        except CancellationError:
+            logger.info("[Commander] response generation was cancelled")
+            return "I had to stop processing your request because you asked me to stop."
+        except Exception as e:
+            logger.error(f"Error generating final response: {e}")
+            return "I'm having trouble generating a response. Please try again later."
         
-        return formatted_response
+    def analyze_image(self, image_data: str) -> Optional[str]:
+        """
+        Analyze an image and extract descriptive context from it.
+        
+        Parameters:
+            image_data (str): Base64-encoded image data
+            
+        Returns:
+            Optional[str]: Descriptive analysis of the image or None if analysis failed
+        """
+        if not image_data:
+            logger.warning("[Commander] No image data provided to analyze_image")
+            return None
+            
+        logger.info("[Commander] Analyzing image data")
+        start_time = time.time()
+        
+        # Format the image extraction prompt
+        extraction_formatted = self.format_prompt("commander.extract_image_data", {})
+        
+        try:
+            # Basic validation of image data
+            if not isinstance(image_data, str):
+                logger.error(f"[Commander] Image data is not a string type: {type(image_data)}")
+                raise ValueError("Image data must be a base64-encoded string")
+            
+            if len(image_data) < 100:
+                logger.warning(f"[Commander] Image data seems too short: {len(image_data)} bytes")
+            
+            # Call the vision model to analyze the image
+            # Make sure to use a model that supports vision
+            vision_model = "gpt-4o-mini"  # gpt-4o has vision capabilities
+            logger.info(f"[Commander] Using vision model: {vision_model}")
+            image_module_client = OpenaiClient(os.getenv("OPENAI_API_KEY"), model=vision_model)
+            
+            # Check OpenAI client configuration
+            logger.info(f"[Commander] OpenAI client created with model: {image_module_client.model}")
+            
+            image_analysis = image_module_client.response(
+                prompt="Please analyze this image in detail, extracting all text and providing a comprehensive description.",
+                system_prompt=extraction_formatted["system"],
+                image_data=image_data
+            )
+            
+            if image_analysis:
+                logger.info("[Commander] Successfully extracted image context")
+                
+                # Track this API call
+                api_call_tracker.track_call("Commander", "analyze_image", time.time() - start_time)
+                
+                return image_analysis
+            else:
+                logger.warning("[Commander] Image analysis returned empty result")
+                return None
+                
+        except Exception as e:
+            logger.error(f"[Commander] Error analyzing image: {str(e)}")
+            return None
 
 class Captain:
-    def __init__(self, model: str, prompts: Dict = None):
+    def __init__(self, model: str, prompts: Dict = None, context_id: str = None):
         self.model = model
-        self.client = OpenaiClient(os.getenv("OPENAI_API_KEY"), model=model)
+        self.client = CancellableOpenAIClient(os.getenv("OPENAI_API_KEY"), model=model, context_id=context_id)
         self.prompts = prompts or {}
         logger.info(f"Captain initialized with model {model}")
         if logger.isEnabledFor(logging.DEBUG) and prompts:
             logger.debug(f"Captain loaded with {len(prompts)} prompt categories")
+            
+    def set_context_id(self, context_id: str):
+        """Set the context ID for cancellation checks."""
+        self.client.set_context_id(context_id)
 
     def format_prompt(self, prompt_name: str, prompt_vars: Dict[str, Any]) -> Dict[str, str]:
         """Format a prompt template with provided variables."""
@@ -521,64 +738,78 @@ class Captain:
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"[Captain] Sending prompt to API for plan:\n{combined_prompt}")
         
-        # Get response from LLM
-        response = self.client.response_reasoning(
-            prompt=combined_prompt,
-            reasoning_effort="high"
-        )
-        
-        # Calculate execution time
-        execution_time = time.time() - start_time
-        
-        # Track API call
-        api_call_tracker.track_call("Captain", "plan", execution_time)
-        
-        # Log the response from the API
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"[Captain] API response for plan: {json.dumps(json.loads(response), indent=2, ensure_ascii=False)}")
-        
-        # Parse JSON response
         try:
-            result = json.loads(response)
+            # Get response from LLM
+            response = self.client.response_reasoning(
+                prompt=combined_prompt,
+                reasoning_effort="high"
+            )
             
-            # Ensure the plan has the expected structure
-            if "function_levels" not in result:
-                logger.warning("Plan response missing 'function_levels', adding empty levels")
-                result["function_levels"] = []
-                
-            # For backward compatibility, convert old format to new if needed
-            if "functions" in result and "function_levels" not in result:
-                logger.warning("Converting legacy functions format to function_levels")
-                function_levels = []
-                
-                # Add ready_to_execute functions as level 1
-                if "ready_to_execute" in result["functions"]:
-                    ready = result["functions"]["ready_to_execute"]
-                    if ready:
-                        function_levels.append(ready)
-                
-                # Add not_ready_to_execute functions as level 2+
-                if "not_ready_to_execute" in result["functions"]:
-                    not_ready = result["functions"]["not_ready_to_execute"]
-                    if not_ready:
-                        # Extract just the function names if they're in dict format
-                        not_ready_names = []
-                        for item in not_ready:
-                            if isinstance(item, dict) and "name" in item:
-                                not_ready_names.append(item["name"])
-                            elif isinstance(item, str):
-                                not_ready_names.append(item)
-                        
-                        if not_ready_names:
-                            function_levels.append(not_ready_names)
-                
-                # Replace the functions with function_levels
-                result["function_levels"] = function_levels
-                del result["functions"]
+            # Calculate execution time
+            execution_time = time.time() - start_time
             
-            return result
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON from Captain plan: {e}")
+            # Track API call
+            api_call_tracker.track_call("Captain", "plan", execution_time)
+            
+            # Log the response from the API
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"[Captain] API response for plan: {json.dumps(json.loads(response), indent=2, ensure_ascii=False)}")
+            
+            # Parse JSON response
+            try:
+                result = json.loads(response)
+                
+                # Ensure the plan has the expected structure
+                if "function_levels" not in result:
+                    logger.warning("Plan response missing 'function_levels', adding empty levels")
+                    result["function_levels"] = []
+                    
+                # For backward compatibility, convert old format to new if needed
+                if "functions" in result and "function_levels" not in result:
+                    logger.warning("Converting legacy functions format to function_levels")
+                    function_levels = []
+                    
+                    # Add ready_to_execute functions as level 1
+                    if "ready_to_execute" in result["functions"]:
+                        ready = result["functions"]["ready_to_execute"]
+                        if ready:
+                            function_levels.append(ready)
+                    
+                    # Add not_ready_to_execute functions as level 2+
+                    if "not_ready_to_execute" in result["functions"]:
+                        not_ready = result["functions"]["not_ready_to_execute"]
+                        if not_ready:
+                            # Extract just the function names if they're in dict format
+                            not_ready_names = []
+                            for item in not_ready:
+                                if isinstance(item, dict) and "name" in item:
+                                    not_ready_names.append(item["name"])
+                                elif isinstance(item, str):
+                                    not_ready_names.append(item)
+                            
+                            if not_ready_names:
+                                function_levels.append(not_ready_names)
+                    
+                    # Replace the functions with function_levels
+                    result["function_levels"] = function_levels
+                    del result["functions"]
+                
+                return result
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse JSON from Captain plan: {e}")
+                # Fallback to empty plan
+                return {
+                    "plan_description": "Failed to create a plan",
+                    "function_levels": []
+                }
+        except CancellationError:
+            logger.info("[Captain] plan was cancelled")
+            return {
+                "plan_description": "Planning was interrupted",
+                "function_levels": []
+            }
+        except Exception as e:
+            logger.error(f"Failed to get Captain plan: {e}")
             # Fallback to empty plan
             return {
                 "plan_description": "Failed to create a plan",
@@ -630,42 +861,58 @@ class Captain:
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"[Captain] Sending prompt to API for evaluate:\n{combined_prompt}")
         
-        # Get response from LLM
-        response = self.client.response_reasoning(
-            prompt=combined_prompt,
-            reasoning_effort="high"
-        )
-        
-        # Calculate execution time
-        execution_time = time.time() - start_time
-        
-        # Track API call
-        api_call_tracker.track_call("Captain", "evaluate", execution_time)
-        
-        # Log the response from the API
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"[Captain] API response for evaluate: {json.dumps(json.loads(response), indent=2, ensure_ascii=False)}")
-        
-        # Parse JSON response
         try:
-            result = json.loads(response)
+            # Get response from LLM
+            response = self.client.response_reasoning(
+                prompt=combined_prompt,
+                reasoning_effort="high"
+            )
             
-            # Ensure all expected fields are present
-            if "change_plan" not in result:
-                result["change_plan"] = False
-            if "error_description" not in result:
-                result["error_description"] = None
-            if "response_ready" not in result:
-                result["response_ready"] = False
+            # Calculate execution time
+            execution_time = time.time() - start_time
+            
+            # Track API call
+            api_call_tracker.track_call("Captain", "evaluate", execution_time)
+            
+            # Log the response from the API
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"[Captain] API response for evaluate: {json.dumps(json.loads(response), indent=2, ensure_ascii=False)}")
+            
+            # Parse JSON response
+            try:
+                result = json.loads(response)
                 
-            # For backward compatibility, handle execution_complete if present but not needed
-            if "execution_complete" in result:
-                logger.warning("Ignoring deprecated 'execution_complete' field in evaluate response")
-                del result["execution_complete"]
-                
-            return result
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON from Captain evaluate: {e}")
+                # Ensure all expected fields are present
+                if "change_plan" not in result:
+                    result["change_plan"] = False
+                if "error_description" not in result:
+                    result["error_description"] = None
+                if "response_ready" not in result:
+                    result["response_ready"] = False
+                    
+                # For backward compatibility, handle execution_complete if present but not needed
+                if "execution_complete" in result:
+                    logger.warning("Ignoring deprecated 'execution_complete' field in evaluate response")
+                    del result["execution_complete"]
+                    
+                return result
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse JSON from Captain evaluate: {e}")
+                # Fallback to continue with current plan
+                return {
+                    "change_plan": False,
+                    "error_description": None,
+                    "response_ready": False
+                }
+        except CancellationError:
+            logger.info("[Captain] evaluate was cancelled")
+            return {
+                "change_plan": False,
+                "error_description": "Evaluation was interrupted",
+                "response_ready": True
+            }
+        except Exception as e:
+            logger.error(f"Failed to get Captain evaluate: {e}")
             # Fallback to continue with current plan
             return {
                 "change_plan": False,
@@ -711,13 +958,36 @@ class Captain:
                     
                     # Process each tool in this category
                     for tool in tools:
-                        tools_text += f"Tool: {tool['name']}\n"
-                        tools_text += f"Description: {tool['description']}\n"
+                        # Get the name and description with fallbacks
+                        tool_name = tool.get('name', 'unnamed_tool')
+                        tool_desc = tool.get('description', 'No description provided')
+                        
+                        tools_text += f"Tool: {tool_name}\n"
+                        tools_text += f"Description: {tool_desc}\n"
                         tools_text += "Inputs:\n"
-                        for input_name, input_desc in tool['inputs'].items():
-                            required = input_name in tool.get('required_inputs', [])
-                            tools_text += f"  - {input_name}: {input_desc} {'(Required)' if required else '(Optional)'}\n"
-                        tools_text += f"Outputs: {tool['outputs']}\n\n"
+                        
+                        # Handle inputs based on type
+                        inputs = tool.get('inputs')
+                        if inputs is None:
+                            tools_text += "  (No inputs defined)\n"
+                            logger.warning(f"Tool {tool_name} has no 'inputs' field")
+                        elif isinstance(inputs, dict):
+                            # Inputs is a dictionary, iterate through key-value pairs
+                            for input_name, input_desc in inputs.items():
+                                required = input_name in tool.get('required_inputs', [])
+                                tools_text += f"  - {input_name}: {input_desc} {'(Required)' if required else '(Optional)'}\n"
+                        elif isinstance(inputs, str):
+                            # Inputs is a string, just display it directly
+                            tools_text += f"  {inputs}\n"
+                            logger.warning(f"Tool {tool_name} has 'inputs' as a string: '{inputs}'")
+                        else:
+                            # Unknown inputs type
+                            tools_text += f"  (Invalid inputs format: {type(inputs).__name__})\n"
+                            logger.warning(f"Tool {tool_name} has 'inputs' in invalid format: {type(inputs).__name__}")
+                        
+                        # Get outputs safely
+                        outputs = tool.get('outputs', 'No outputs defined')
+                        tools_text += f"Outputs: {outputs}\n\n"
                     
                     # Add separator between categories
                     tools_text += "-" * 50 + "\n\n"
@@ -731,13 +1001,17 @@ class Captain:
         return tools_text or "No tools available for the specified platforms"
 
 class Soldier:
-    def __init__(self, model: str, prompts: Dict = None):
+    def __init__(self, model: str, prompts: Dict = None, context_id: str = None):
         self.model = model
-        self.client = OpenaiClient(os.getenv("OPENAI_API_KEY"), model=model)
+        self.client = CancellableOpenAIClient(os.getenv("OPENAI_API_KEY"), model=model, context_id=context_id)
         self.prompts = prompts or {}
         logger.info(f"Soldier initialized with model {model}")
         if logger.isEnabledFor(logging.DEBUG) and prompts:
             logger.debug(f"Soldier loaded with {len(prompts)} prompt categories")
+            
+    def set_context_id(self, context_id: str):
+        """Set the context ID for cancellation checks."""
+        self.client.set_context_id(context_id)
     
     def format_prompt(self, prompt_name: str, prompt_vars: Dict[str, Any]) -> Dict[str, str]:
         """Format a prompt template with provided variables."""
@@ -835,102 +1109,138 @@ class Soldier:
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"[Soldier] Sending prompt to API for tool execution {function_name}:\n{combined_prompt}")
         
-        # Get parameter values from LLM
-        tool_call = self.client.use_tool(
-            prompt=combined_prompt, 
-            tools=[tool_schema],
-            reasoning_effort="high"
-        )
-        
-        # Log the tool call response
-        if logger.isEnabledFor(logging.DEBUG) and tool_call:
-            logger.debug(f"[Soldier] API response for tool call {function_name}: {json.dumps(tool_call, indent=2, ensure_ascii=False)}")
-        
-        if not tool_call:
-            # Calculate execution time for error case
-            execution_time = time.time() - start_time
-            
-            # Track failed API call
-            api_call_tracker.track_call("Soldier", f"execute_{function_name}_failed", execution_time)
-            
-            logger.error(f"Failed to get tool call for {function_name}")
-            return {
-                "function": function_name,
-                "error": "Failed to determine parameters",
-                "result": None
-            }
-        
-        # Import tool implementations here to avoid circular imports
-        from tools.tools_declaration import linear_tools, slack_tools
-        
-        # Map function name to implementation
-        tool_implementations = {
-            # Linear tools
-            "filterIssues": linear_tools.filterIssues,
-            "createIssue": linear_tools.createIssue,
-            "updateIssue": linear_tools.updateIssue,
-            "filterComments": linear_tools.filterComments,
-            "filterAttachments": linear_tools.filterAttachments,
-            "getAllUsers": linear_tools.getAllUsers,
-            "getAllProjects": linear_tools.getAllProjects,
-            "getAllCycles": linear_tools.getAllCycles,
-            "getAllLabels": linear_tools.getAllLabels,
-            "getAllStates": linear_tools.getAllStates,
-            "filterProjects": linear_tools.filterProjects,
-            "filterCycles": linear_tools.filterCycles,
-            "createComment": linear_tools.createComment,
-            "getCurrentUser": linear_tools.getCurrentUser,
-            "semantic_search_linear": linear_tools.semantic_search_linear,
-            
-            # Slack tools
-            "search_channel_history": slack_tools.search_channel_history,
-            "get_users": slack_tools.get_users,
-            "get_current_user": slack_tools.get_current_user
-        }
-        
-        # Get the tool implementation
-        tool_func = tool_implementations.get(function_name)
-        if not tool_func:
-            # Calculate execution time for error case
-            execution_time = time.time() - start_time
-            
-            # Track failed API call
-            api_call_tracker.track_call("Soldier", f"execute_{function_name}_not_implemented", execution_time)
-            
-            logger.error(f"No implementation found for function: {function_name}")
-            return {
-                "function": function_name,
-                "error": f"Function {function_name} not implemented",
-                "result": None
-            }
-        
-        # Execute the tool
         try:
-            params = tool_call.get("parameters", {})
-            logger.info(f"Executing {function_name} with parameters: {params}")
+            # Get parameter values from LLM
+            tool_call = self.client.use_tool(
+                prompt=combined_prompt, 
+                tools=[tool_schema],
+                reasoning_effort="high"
+            )
             
-            # Handle async functions
-            if function_name == "search_channel_history":
-                result = await tool_func(**params)
-            else:
-                result = tool_func(**params)
+            # Log the tool call response
+            if logger.isEnabledFor(logging.DEBUG) and tool_call:
+                logger.debug(f"[Soldier] API response for tool call {function_name}: {json.dumps(tool_call, indent=2, ensure_ascii=False)}")
             
-            # Calculate execution time for successful case
-            execution_time = time.time() - start_time
+            if not tool_call:
+                # Calculate execution time for error case
+                execution_time = time.time() - start_time
+                
+                # Track failed API call
+                api_call_tracker.track_call("Soldier", f"execute_{function_name}_failed", execution_time)
+                
+                logger.error(f"Failed to get tool call for {function_name}")
+                return {
+                    "function": function_name,
+                    "error": "Failed to determine parameters",
+                    "result": None
+                }
             
-            # Track successful API call
-            api_call_tracker.track_call("Soldier", f"execute_{function_name}", execution_time)
+            # Import tool implementations here to avoid circular imports
+            from tools.tools_declaration import linear_tools, slack_tools
             
-            # Log the execution result (summary)
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"[Soldier] Execution result for {function_name}: {result}")
+            # Map function name to implementation
+            tool_implementations = {
+                # Linear tools
+                "filterIssues": linear_tools.filterIssues,
+                "createIssue": linear_tools.createIssue,
+                "updateIssue": linear_tools.updateIssue,
+                "filterComments": linear_tools.filterComments,
+                "filterAttachments": linear_tools.filterAttachments,
+                "getAllUsers": linear_tools.getAllUsers,
+                "getAllProjects": linear_tools.getAllProjects,
+                "getAllCycles": linear_tools.getAllCycles,
+                "getAllLabels": linear_tools.getAllLabels,
+                "getAllStates": linear_tools.getAllStates,
+                "filterProjects": linear_tools.filterProjects,
+                "filterCycles": linear_tools.filterCycles,
+                "createComment": linear_tools.createComment,
+                "getCurrentUser": linear_tools.getCurrentUser,
+                "semantic_search_linear": linear_tools.semantic_search_linear,
+                
+                # Slack tools
+                "search_channel_history": slack_tools.search_channel_history,
+                "get_users": slack_tools.get_users,
+                "get_current_user": slack_tools.get_current_user
+            }
             
+            # Get the tool implementation
+            tool_func = tool_implementations.get(function_name)
+            if not tool_func:
+                # Calculate execution time for error case
+                execution_time = time.time() - start_time
+                
+                # Track failed API call
+                api_call_tracker.track_call("Soldier", f"execute_{function_name}_not_implemented", execution_time)
+                
+                logger.error(f"No implementation found for function: {function_name}")
+                return {
+                    "function": function_name,
+                    "error": f"Function {function_name} not implemented",
+                    "result": None
+                }
+            
+            # Execute the tool
+            try:
+                params = tool_call.get("parameters", {})
+                logger.info(f"Executing {function_name} with parameters: {params}")
+                
+                # Check if this function requires modal approval
+                linear_approval_functions = ["createIssue", "updateIssue"]
+                if function_name in linear_approval_functions:
+                    logger.info(f"Function {function_name} requires modal approval - deferring execution")
+                    return {
+                        "function": function_name,
+                        "parameters": params,
+                        "result": None,
+                        "requires_modal_approval": True,
+                        "description": f"Waiting for approval to {function_name}"
+                    }
+                
+                # Handle async functions
+                if function_name == "search_channel_history":
+                    result = await tool_func(**params)
+                else:
+                    result = tool_func(**params)
+                
+                # Calculate execution time for successful case
+                execution_end_time = time.time()
+                execution_time = execution_end_time - start_time
+                
+                # Track successful API call
+                api_call_tracker.track_call("Soldier", f"execute_{function_name}", execution_time)
+                
+                # Log the execution result (summary)
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"[Soldier] Execution result for {function_name}: {result}")
+                
+                return {
+                    "function": function_name,
+                    "parameters": params,
+                    "result": result
+                }
+            except Exception as e:
+                # Calculate execution time for error case
+                execution_time = time.time() - start_time
+                
+                # Track failed API call
+                api_call_tracker.track_call("Soldier", f"execute_{function_name}_error", execution_time)
+                
+                logger.error(f"Error executing {function_name}: {str(e)}")
+                return {
+                    "function": function_name,
+                    "parameters": tool_call.get("parameters", {}),
+                    "error": str(e),
+                    "result": None
+                }
+        except CancellationError:
+            logger.info(f"[Soldier] execute for {function_name} was cancelled")
             return {
                 "function": function_name,
-                "parameters": params,
-                "result": result
+                "error": "Operation was cancelled",
+                "result": None
             }
         except Exception as e:
+            logger.error(f"Error with tool call for {function_name}: {str(e)}")
             # Calculate execution time for error case
             execution_time = time.time() - start_time
             
@@ -940,7 +1250,6 @@ class Soldier:
             logger.error(f"Error executing {function_name}: {str(e)}")
             return {
                 "function": function_name,
-                "parameters": tool_call.get("parameters", {}),
                 "error": str(e),
                 "result": None
             }

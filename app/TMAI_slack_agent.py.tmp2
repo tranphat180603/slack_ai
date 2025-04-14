@@ -1,4 +1,0 @@
-from context_manager import context_manager
-
-# Global dictionary to track stop requests
-STOP_REQUESTS = {}

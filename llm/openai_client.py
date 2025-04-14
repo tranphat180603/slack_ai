@@ -21,6 +21,10 @@ from openai import OpenAI
 # Configure logger
 logger = logging.getLogger("openai_client")
 
+# Add a new CancellationError class
+class CancellationError(Exception):
+    """Exception raised when an operation is cancelled."""
+    pass
 
 class TokenUsageTracker:
     """Tracks token usage for OpenAI API calls"""
@@ -185,7 +189,7 @@ class OpenaiClient(ABC):
         self.model = model
         self.token_tracker = TokenUsageTracker()
 
-    def response(self, prompt: str, system_prompt: str = None, stream: bool = False) -> str:
+    def response(self, prompt: str, system_prompt: str = None, image_data: str = None, stream: bool = False) -> str:
         assert self.model.startswith("gpt"), "Only GPT models are supported"
         messages = []
         if system_prompt:
@@ -195,16 +199,69 @@ class OpenaiClient(ABC):
                     "content": system_prompt
                 }
             )
-        messages.append(
-            {
-                "role": "user",
-                "content": prompt
+        
+        # Log image data availability for debugging
+        if image_data:
+            logger.info(f"Image data is provided, length: {len(image_data)} bytes")
+        else:
+            logger.warning("No image_data provided to response method or it's empty")
+        
+        # Handle image input if provided
+        if image_data and (
+            "vision" in self.model or
+            self.model.startswith("gpt-4o") or  # This will match gpt-4o, gpt-4o-mini, gpt-4o-2024-11-20, etc.
+            "gpt-4" in self.model  # For other gpt-4 variants with vision
+        ):
+            logger.info(f"Adding image content to message with model {self.model}")
+            
+            # Create message with text and image content
+            image_content = {
+                "type": "input_image",
+                "image_url": f"data:image/jpeg;base64,{image_data}"
             }
-        )
+            
+            text_content = {
+                "type": "input_text",
+                "text": prompt
+            }
+            
+            # Log the structure being created
+            logger.debug(f"Text content: {text_content}")
+            logger.debug(f"Image content type: {image_content['type']}")
+            logger.debug(f"Image URL starts with: {image_content['image_url'][:30]}...")
+            
+            messages.append({
+                "role": "user",
+                "content": [text_content, image_content]
+            })
+            
+            logger.info(f"Including image data in response request with model {self.model}")
+        else:
+            # Check why we're not including image (for debugging)
+            if image_data:
+                logger.error(f"CRITICAL: Image data provided but not included in message. Model={self.model}")
+                
+                # Check what condition failed
+                if not "vision" in self.model and not self.model.startswith("gpt-4o") and not "gpt-4" in self.model:
+                    logger.error(f"Model check failed. Model {self.model} doesn't match any vision-compatible pattern")
+                else:
+                    logger.error(f"Unexpected error: Model {self.model} should be vision-compatible, but image wasn't added")
+            
+            # Regular text-only message
+            messages.append(
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            )
         
         # Count input tokens for logging only (will be replaced with actual count from API)
         input_text = (system_prompt or "") + prompt
         estimated_input_tokens = self.token_tracker.count_tokens(input_text, self.model)
+        
+        # Add estimate for image tokens if image is provided (roughly 500 tokens per image)
+        if image_data:
+            estimated_input_tokens += 500
         
         # Reset last_tracked model to detect if we'll get usage info
         self.token_tracker.last_tracked_model = None
@@ -212,7 +269,7 @@ class OpenaiClient(ABC):
         
         # Debug logging
         logger.debug(f"Using responses.create with model={self.model}")
-        
+                
         response = self.client.responses.create(
             model=self.model,
             input=messages,
@@ -278,7 +335,21 @@ class OpenaiClient(ABC):
                 
                 return result
             except Exception as e:
+                # Log full exception details for debugging
                 logger.error(f"Error extracting response content: {str(e)}")
+                logger.error(f"Response type: {type(response)}")
+                
+                # Try to extract useful information from the response object
+                try:
+                    if hasattr(response, 'output'):
+                        logger.error(f"Response output type: {type(response.output)}")
+                        logger.error(f"Response output: {response.output}")
+                    
+                    # Extract any error message
+                    if hasattr(response, 'error'):
+                        logger.error(f"API error: {response.error}")
+                except Exception as inner_e:
+                    logger.error(f"Error extracting response details: {str(inner_e)}")
                 
                 # Fallback - use string representation
                 result = str(response)
@@ -603,6 +674,92 @@ class OpenaiClient(ABC):
             
         # Full report at any log level - not just debug
         self.token_tracker.log_report(log_level)
+
+class CancellableOpenAIClient(OpenaiClient):
+    """OpenAI client with cancellation support for long-running operations."""
+    
+    def __init__(self, api_key: str, model: str = "gpt-4o-mini", context_id: str = None):
+        """
+        Initialize a cancellable OpenAI client.
+        
+        Args:
+            api_key: OpenAI API key
+            model: Model to use
+            context_id: ID of the context to check for cancellation
+        """
+        super().__init__(api_key, model)
+        self.context_id = context_id
+        
+    def set_context_id(self, context_id: str):
+        """Set the context ID to use for cancellation checks."""
+        self.context_id = context_id
+        
+    def is_cancelled(self) -> bool:
+        """Check if the current operation has been cancelled."""
+        if not self.context_id:
+            return False
+        
+        try:
+            from app.TMAI_slack_agent import context_manager
+            context = context_manager.get_context(self.context_id)
+            return context and context.get('stop_requested', False)
+        except ImportError:
+            logger.warning("Could not import context_manager, cancellation checks disabled")
+            return False
+        except Exception as e:
+            logger.error(f"Error checking cancellation status: {e}")
+            return False
+    
+    def response(self, prompt: str, system_prompt: str = None, image_data: str = None, stream: bool = False) -> str:
+        """Enhanced response method with cancellation checks."""
+        # Check for cancellation before API call
+        if self.is_cancelled():
+            logger.info(f"Operation cancelled before API call (context_id={self.context_id})")
+            raise CancellationError("Operation was cancelled")
+            
+        # Call parent implementation
+        result = super().response(prompt, system_prompt, image_data, stream)
+        
+        # Check again after API call
+        if self.is_cancelled():
+            logger.info(f"Operation cancelled after API call (context_id={self.context_id})")
+            raise CancellationError("Operation was cancelled")
+            
+        return result
+    
+    def response_reasoning(self, prompt: str, reasoning_effort: str, stream: bool = False) -> str:
+        """Enhanced reasoning response method with cancellation checks."""
+        # Check for cancellation before API call
+        if self.is_cancelled():
+            logger.info(f"Reasoning operation cancelled before API call (context_id={self.context_id})")
+            raise CancellationError("Operation was cancelled")
+            
+        # Call parent implementation
+        result = super().response_reasoning(prompt, reasoning_effort, stream)
+        
+        # Check again after API call
+        if self.is_cancelled():
+            logger.info(f"Reasoning operation cancelled after API call (context_id={self.context_id})")
+            raise CancellationError("Operation was cancelled")
+            
+        return result
+    
+    def use_tool(self, prompt: str, reasoning_effort: str, tools: List[Dict[str, Any]] = None, stream: bool = False) -> Dict[str, Any]:
+        """Enhanced tool use method with cancellation checks."""
+        # Check for cancellation before API call
+        if self.is_cancelled():
+            logger.info(f"Tool use operation cancelled before API call (context_id={self.context_id})")
+            raise CancellationError("Operation was cancelled")
+            
+        # Call parent implementation
+        result = super().use_tool(prompt, reasoning_effort, tools, stream)
+        
+        # Check again after API call
+        if self.is_cancelled():
+            logger.info(f"Tool use operation cancelled after API call (context_id={self.context_id})")
+            raise CancellationError("Operation was cancelled")
+            
+        return result
 
 def test():
     client = OpenaiClient(os.getenv("OPENAI_API_KEY"), model="o3-mini")

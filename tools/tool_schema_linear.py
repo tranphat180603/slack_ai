@@ -16,6 +16,10 @@ FILTER_ISSUES_SCHEMA = {
                 "description": "The team key to filter issues by",
                 "enum": ["ENG", "OPS", "RES", "AI", "MKT", "PRO"]
             },
+            "issue_number": {
+                "type": "integer",
+                "description": "Filter by specific issue number. Note: Issue numbers are only unique within a team, so it's recommended to use with teamKey."
+            },
             "state": {
                 "type": "string",
                 "description": "Filter by issue state (e.g. 'In Progress', 'Todo', 'Done'). Omit if no specific state filter is needed."
@@ -47,7 +51,7 @@ FILTER_ISSUES_SCHEMA = {
             },
             "project_id": {
                 "type": "string",
-                "description": "Filter by project ID. Omit rather than providing an empty string."
+                "description": "Filtesr by project ID. Omit rather than providing an empty string."
             },
             "label_name": {
                 "type": "string",
@@ -55,7 +59,11 @@ FILTER_ISSUES_SCHEMA = {
             },
             "first": {
                 "type": "number",
-                "description": "Limit the number of issues returned. Use a positive integer."
+                "description": "Limit the number of issues returned. Use a positive integer. Determine a reasonable number of this as not to flush the context window."
+            },
+            "include_description": {
+                "type": "boolean",
+                "description": "Whether to include the description field in the results. Set to False most of the time. Just set the True if users request details about the issue."
             }
         },
         "required": ["teamKey"],
@@ -67,7 +75,7 @@ FILTER_ISSUES_SCHEMA = {
 CREATE_ISSUE_SCHEMA = {
     "type": "function",
     "name": "createIssue",
-    "description": "GraphQL-based function to create a new issue in Linear with specified details",
+    "description": "GraphQL-based function to create a new issue in Linear with specified details. The purpose of this function is to create context-aware, well-groomed issues in Linear.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -82,7 +90,7 @@ CREATE_ISSUE_SCHEMA = {
             },
             "description": {
                 "type": "string",
-                "description": "Markdown description of the issue"
+                "description": "Markdown description of the issue. Always try to groom the description carefully before creating the issue."
             },
             "priority": {
                 "type": "number",
@@ -91,7 +99,8 @@ CREATE_ISSUE_SCHEMA = {
             },
             "estimate": {
                 "type": "number",
-                "description": "Estimate points for the issue"
+                "description": "Estimate points for the issue",
+                "enum": [1, 2, 3, 4, 5, 6, 7]
             },
             "assignee_name": {
                 "type": "string",
@@ -130,7 +139,7 @@ CREATE_ISSUE_SCHEMA = {
 UPDATE_ISSUE_SCHEMA = {
     "type": "function",
     "name": "updateIssue",
-    "description": "GraphQL-based function to update an existing issue in Linear",
+    "description": "GraphQL-based function to update an existing issue in Linear. This function is to properly update the issue with the new details gathered Linear.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -140,11 +149,11 @@ UPDATE_ISSUE_SCHEMA = {
             },
             "title": {
                 "type": "string",
-                "description": "New title for the issue"
+                "description": "Whatever you write here, will be the entire new title for the issue. If not changed, must repeat the old title. Do not leave it blank."
             },
             "description": {
                 "type": "string",
-                "description": "New markdown description"
+                "description": "Whatever you write here, will be the entire new description for the issue. If not changed, must repeat the old description. Always try to groom the description carefully if the user requests."
             },
             "priority": {
                 "type": "number",
@@ -153,7 +162,8 @@ UPDATE_ISSUE_SCHEMA = {
             },
             "estimate": {
                 "type": "number",
-                "description": "New estimate points"
+                "description": "New estimate points",
+                "enum": [1, 2, 3, 4, 5, 6, 7]
             },
             "assignee_name": {
                 "type": "string",
@@ -259,6 +269,18 @@ GET_USERS_SCHEMA = {
             }
         },
         "required": ["teamKey"],
+        "additionalProperties": False
+    }
+}
+
+GET_TEAMS_SCHEMA = {
+    "type": "function",
+    "name": "getAllTeams",
+    "description": "GraphQL-based function to get all teams in Linear",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
         "additionalProperties": False
     }
 }
@@ -413,16 +435,27 @@ CREATE_COMMENT_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "issue_number": {
+            "issueNumber": {
                 "type": "integer",
                 "description": "The issue number to comment on"
             },
-            "body": {
+            "teamKey": {
                 "type": "string",
-                "description": "The comment text (supports markdown)"
+                "description": "The team key to comment on (enum: ENG, OPS, RES, AI, MKT, PRO)"
+            },
+            "commentData": {
+                "type": "object",
+                "description": "The comment data object containing the body text (supports markdown)",
+                "properties": {
+                    "body": {
+                        "type": "string",
+                        "description": "The comment text in markdown format"
+                    }
+                },
+                "required": ["body"]
             }
         },
-        "required": ["issue_number", "body"],
+        "required": ["issueNumber", "teamKey", "commentData"],
         "additionalProperties": False
     }
 }
@@ -471,6 +504,7 @@ LINEAR_SCHEMAS = {
     "filterComments": FILTER_COMMENTS_SCHEMA,
     "filterAttachments": FILTER_ATTACHMENTS_SCHEMA,
     "getAllUsers": GET_USERS_SCHEMA,
+    "getAllTeams": GET_TEAMS_SCHEMA,
     "getAllProjects": GET_PROJECTS_SCHEMA,
     "getAllCycles": GET_CYCLES_SCHEMA,
     "getAllLabels": GET_LABELS_SCHEMA,

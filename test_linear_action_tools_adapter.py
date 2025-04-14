@@ -45,6 +45,23 @@ def test_create_issue_with_adapter():
         else:
             cycle_name = target_cycle.get("name")
         
+        # Test the getUserByName function directly to debug
+        logger.info(f"Testing getUserByName function for assignee '{ASSIGNEE_NAME}'")
+        from ops_linear_db.linear_client import LinearClient
+        linear_client = LinearClient(os.getenv("LINEAR_API_KEY"))
+        user = linear_client.getUserByName(ASSIGNEE_NAME)
+        if user:
+            logger.info(f"Found user directly: {user.get('displayName')} with ID: {user.get('id')}")
+        else:
+            logger.warning(f"User '{ASSIGNEE_NAME}' not found directly")
+            
+        # Test with team context
+        user_with_team = linear_client.getUserByName(ASSIGNEE_NAME, TEAM_KEY)
+        if user_with_team:
+            logger.info(f"Found user with team context: {user_with_team.get('displayName')} with ID: {user_with_team.get('id')}")
+        else:
+            logger.warning(f"User '{ASSIGNEE_NAME}' not found with team context")
+            
         # Create issue using direct parameters (no need to look up IDs)
         timestamp = int(time.time())
         
@@ -68,10 +85,30 @@ def test_create_issue_with_adapter():
         # Show how parameters would be adapted
         adapted = LinearParameterAdapter.adapt_create_issue(params)
         logger.info(f"Parameters would be adapted to: {json.dumps(adapted)}")
-        
-        # Create the issue
-        # Note: In a real implementation, the adapter would handle ID lookups
-        # For this test, we'll manually create the proper data structure
+
+        # Let's test to directly create the issue using linear_tools
+        # This will use the adapter mechanism
+        try:
+            issue = linear_tools.createIssue(**params)
+            if issue:
+                issue_number = issue.get("number")
+                logger.info(f"Successfully created issue #{issue_number}: {issue.get('title')}")
+                logger.info(f"Issue details: {json.dumps(issue, indent=2) if issue else 'None'}")
+                
+                # Check if assignee was set correctly
+                if issue.get("assignee"):
+                    logger.info(f"Assignee set correctly to: {issue.get('assignee').get('displayName')}")
+                else:
+                    logger.warning("Assignee not set in the created issue")
+                
+                return issue_number
+            else:
+                logger.error("Failed to create issue: No result returned")
+                return None
+        except Exception as e:
+            logger.error(f"Error using linear_tools.createIssue: {e}")
+            # Fall back to manual method for debugging
+            logger.info("Falling back to manual method for debugging")
         
         # Manually adapt parameters (in a real implementation, this would be handled by the adapter)
         from ops_linear_db.linear_client import LinearClient
@@ -136,7 +173,7 @@ def test_create_issue_with_adapter():
         return None
 
 def test_update_issue_with_adapter(issue_number):
-    """Test updating an issue using adapter-friendly parameters"""
+    """Test updating an issue using adapter-friendly parameters with the actual adapter mechanism"""
     if not issue_number:
         logger.error("No issue number provided for update test")
         return
@@ -156,36 +193,64 @@ def test_update_issue_with_adapter(issue_number):
         # Log the raw parameters
         logger.info(f"Updating issue with raw parameters: {json.dumps(params)}")
         
-        # Show how parameters would be adapted
+        # Show how parameters would be adapted by the adapter method
         adapted = LinearParameterAdapter.adapt_update_issue(params)
         logger.info(f"Parameters would be adapted to: {json.dumps(adapted)}")
         
-        # In a real implementation with a complete adapter, we would use:
-        # result = linear_tools.updateIssue(**params)
+        # Now properly use the adapter mechanism through linear_tools
+        # This will automatically call LinearParameterAdapter.adapt_update_issue
+        # through the @adapt_parameters decorator
+        result = linear_tools.updateIssue(**params)
         
-        # For this test, we'll use the adapted parameters directly
-        from ops_linear_db.linear_client import LinearClient
-        linear_client = LinearClient(os.getenv("LINEAR_API_KEY"))
-        
-        result = linear_client.updateIssue(
-            issueNumber=issue_number,
-            data={
-                "title": params["title"],
-                "description": params["description"],
-                "priority": params["priority"]
-            }
-        )
-        
-        if not result.get("success"):
-            logger.error(f"Failed to update issue: {result}")
+        if not result:
+            logger.error("Failed to update issue: No result returned")
             return
         
-        updated_issue = result.get("issue", {})
-        logger.info(f"Successfully updated issue #{issue_number}: {updated_issue.get('title')}")
-        logger.info(f"Updated issue details: {json.dumps(updated_issue, indent=2)}")
+        logger.info(f"Successfully updated issue #{issue_number}: {result.get('title')}")
+        logger.info(f"Updated issue details: {json.dumps(result, indent=2)}")
     
     except Exception as e:
         logger.error(f"Error updating issue: {e}")
+
+def test_create_comment_with_adapter(issue_number):
+    """Test creating a comment on an issue using adapter-friendly parameters"""
+    if not issue_number:
+        logger.error("No issue number provided for comment test")
+        return False
+    
+    try:
+        # Prepare comment parameters
+        timestamp = int(time.time())
+        params = {
+            "issueNumber": issue_number,
+            "teamKey": TEAM_KEY,  # Add team key to properly resolve issue ID
+            "commentData": {
+                "body": f"This is a test comment created at timestamp {timestamp}.\n\nIt includes:\n- Bullet points\n- Code blocks\n\n```python\nprint('Hello from Linear!')\n```"
+            }
+        }
+        
+        # Log the parameters
+        logger.info(f"Creating comment with parameters: {json.dumps(params)}")
+        
+        # Create the comment using linear_tools
+        result = linear_tools.createComment(**params)
+        
+        if not result:
+            logger.error("Failed to create comment: No result returned")
+            return False
+        
+        # Log success info
+        comment_id = result.get("id")
+        comment_body = result.get("body", "")
+        logger.info(f"Successfully created comment ID {comment_id}")
+        logger.info(f"Comment body: {comment_body[:100]}...")
+        logger.info(f"Comment details: {json.dumps(result, indent=2) if result else 'None'}")
+        
+        return True
+    
+    except Exception as e:
+        logger.error(f"Error creating comment: {e}")
+        return False
 
 def run_tests():
     """Run all tests"""
@@ -197,8 +262,78 @@ def run_tests():
     if issue_number:
         # Test updating the created issue with adapter
         test_update_issue_with_adapter(issue_number)
+        
+        # Test creating a comment on the issue
+        comment_result = test_create_comment_with_adapter(issue_number)
+        if comment_result:
+            logger.info("Comment creation test completed successfully")
+        else:
+            logger.error("Comment creation test failed")
     
     logger.info("Linear action tools adapter tests completed")
 
+def test_assignee_name_handling():
+    """Test specifically how the adapter handles assignee_name"""
+    logger.info("Testing assignee name handling in adapter")
+    
+    try:
+        # Try getting user info directly
+        logger.info(f"Looking up user with display name '{ASSIGNEE_NAME}'")
+        
+        # First approach: getCurrentUser
+        try:
+            user_info = linear_tools.getCurrentUser(f"@{ASSIGNEE_NAME}")
+            logger.info(f"getCurrentUser result for '@{ASSIGNEE_NAME}': {json.dumps(user_info, indent=2)}")
+        except Exception as e:
+            logger.error(f"Error in getCurrentUser: {e}")
+        
+        # Second approach: scan all teams for the user
+        teams = ["OPS", "ENG", "RES", "AI", "MKT", "PRO"]
+        users = []
+        
+        for team_key in teams:
+            try:
+                logger.info(f"Getting users for team {team_key}")
+                team_users = linear_tools.getAllUsers(team_key)
+                logger.info(f"Found {len(team_users)} users in team {team_key}")
+                users.extend(team_users)
+            except Exception as e:
+                logger.error(f"Error getting users for team {team_key}: {e}")
+        
+        # Look for matching display name
+        found_users = [u for u in users if ASSIGNEE_NAME.lower() in u.get("displayName", "").lower()]
+        
+        if found_users:
+            logger.info(f"Found {len(found_users)} users matching '{ASSIGNEE_NAME}':")
+            for user in found_users:
+                logger.info(f"- {user.get('displayName')} (ID: {user.get('id')})")
+        else:
+            logger.warning(f"No users found with display name containing '{ASSIGNEE_NAME}'")
+            logger.info("Available user display names:")
+            display_names = sorted(list(set([u.get("displayName") for u in users if u.get("displayName")])))
+            for name in display_names[:20]:  # Show first 20 to avoid flooding logs
+                logger.info(f"- {name}")
+            if len(display_names) > 20:
+                logger.info(f"... and {len(display_names) - 20} more")
+        
+        # Test the adapter method directly
+        params = {"assignee_name": ASSIGNEE_NAME, "teamKey": TEAM_KEY}
+        adapted = LinearParameterAdapter.adapt_create_issue(params)
+        logger.info(f"adapt_create_issue result for assignee_name='{ASSIGNEE_NAME}': {json.dumps(adapted)}")
+        
+        # Try with full name if available
+        if found_users:
+            full_name = found_users[0].get("displayName")
+            params = {"assignee_name": full_name, "teamKey": TEAM_KEY}
+            adapted = LinearParameterAdapter.adapt_create_issue(params)
+            logger.info(f"adapt_create_issue result for assignee_name='{full_name}': {json.dumps(adapted)}")
+    
+    except Exception as e:
+        logger.error(f"Error in test_assignee_name_handling: {e}")
+
 if __name__ == "__main__":
+    # Add assignee name handling test
+    test_assignee_name_handling()
+    
+    # Run the main tests
     run_tests() 

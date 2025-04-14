@@ -13,6 +13,8 @@ import asyncio
 import json
 import re
 import uuid
+import requests
+import base64
 from typing import Dict, List, Any, Optional, Union, Callable
 
 from slack_sdk import WebClient
@@ -25,7 +27,6 @@ from tools.tool_schema_slack import SLACK_SCHEMAS
 from tools.tool_schema_semantic_search import SEMANTIC_SEARCH_SCHEMAS
 from rate_limiter import global_limiter, slack_limiter, linear_limiter, openai_limiter
 from ops_linear_db.linear_client import LinearClient
-from utils import safe_append, format_for_slack
 from agent import Commander, Captain, Soldier, get_api_call_tracker, log_api_call_report
 from context_manager import context_manager
 
@@ -483,13 +484,13 @@ class ConversationManager:
             if msg["role"] == "user":
                 # Format user messages with sender name
                 msg_content = msg['content']
-                history_context.append(f"**{sender_name} (#{i} turn):** {msg_content}")
+                history_context.append(f"**{sender_name}):** {msg_content}")
             else:
                 # Format assistant messages
                 content = msg["content"]
-                if len(content) > 500:
-                    content = content[:500] + "... (content truncated)"
-                history_context.append(f"**Assistant (#{i - 1} turn):** {content}")
+                if len(content) > 200:
+                    content = content[:200] + "... (content truncated)"
+                history_context.append(f"**Assistant):** {content}")
         
         # Add a separator at the end to clearly distinguish history from current query
         if history_context:
@@ -523,14 +524,18 @@ class TMAISlackAgent:
         self.openai_client = OpenaiClient(api_key=openai_api_key, model=ai_model)
         
         # Store default model
-        self.default_model = ai_model
+        self.ai_model = ai_model
         
         # Store model configuration for different phases
-        self.model_config = model_config or {
-            "commander": ai_model,
-            "captain": ai_model,
-            "soldier": ai_model
+        # Default to using the main model for all roles if not specified
+        self.model_config = {
+            "commander": model_config.get("commander", ai_model) if model_config else ai_model,
+            "captain": model_config.get("captain", ai_model) if model_config else ai_model,
+            "soldier": model_config.get("soldier", ai_model) if model_config else ai_model
         }
+        
+        logger.info(f"Initialized with model config: Commander={self.model_config['commander']}, " +
+                    f"Captain={self.model_config['captain']}, Soldier={self.model_config['soldier']}")
         
         # Store prompts
         self.prompts = prompts or {}
@@ -575,15 +580,62 @@ class TMAISlackAgent:
         from ops_slack.slack_tools import SlackClient
         self.slack_tool_client = SlackClient(slack_bot_token, slack_user_token)
         
-        # Initialize agent components
-        self.commander = Commander(model=self.model_config.get("commander", ai_model), prompts=self.prompts)
-        self.captain = Captain(model=self.model_config.get("captain", ai_model), prompts=self.prompts)
-        self.soldier = Soldier(model=self.model_config.get("soldier", ai_model), prompts=self.prompts)
+        # Initialize agent components with their respective models
+        self._initialize_agent_components()
         
         # Initialize conversation store
         self.conversation_history = {}
         
         logger.debug("TMAI Slack Agent initialized")
+        
+    def _initialize_agent_components(self):
+        """Initialize the agent components (Commander, Captain, Soldier)."""
+        # These are initialized without context_id as it will be set before use
+        self.commander = Commander(
+            model=self.model_config.get("commander", self.ai_model),
+            prompts=self.prompts
+        )
+        
+        # Use specific models or default to ai_model
+        commander_model = self.model_config.get("commander", self.ai_model) if self.model_config else self.ai_model
+        captain_model = self.model_config.get("captain", self.ai_model) if self.model_config else self.ai_model 
+        soldier_model = self.model_config.get("soldier", self.ai_model) if self.model_config else self.ai_model
+        
+        self.captain = Captain(
+            model=captain_model,
+            prompts=self.prompts
+        )
+        
+        self.soldier = Soldier(
+            model=soldier_model,
+            prompts=self.prompts
+        )
+        
+        logger.info(f"Agent components initialized with models: Commander={commander_model}, Captain={captain_model}, Soldier={soldier_model}")
+
+    def _set_context_for_agents(self, context_id: str):
+        """Set the context ID for all agent components to enable cancellation."""
+        self.commander.set_context_id(context_id)
+        self.captain.set_context_id(context_id)
+        self.soldier.set_context_id(context_id)
+        logger.debug(f"Set context_id={context_id} for all agent components")
+
+    def update_model_config(self, model_config: Dict[str, str]):
+        """Update the model configuration and reinitialize components if needed."""
+        changed = False
+        
+        # Check which components need to be reinitialized
+        for component in ["commander", "captain", "soldier"]:
+            if component in model_config and model_config[component] != self.model_config.get(component):
+                self.model_config[component] = model_config[component]
+                changed = True
+                
+        # Reinitialize components if configuration changed
+        if changed:
+            self._initialize_agent_components()
+            return True
+            
+        return False
     
     def parse_user_mentions(self, text: str) -> str:
         """Convert Slack user mentions to actual display names."""
@@ -633,39 +685,75 @@ class TMAISlackAgent:
         logger.debug(f"Extracted {len(urls)} URLs")
         return urls
     
-    async def execute_batch(self, plan, ready_functions, user_query, previous_results):
-        """Execute a batch of functions concurrently."""
-        logger.debug(f"Executing batch of {len(ready_functions)} functions: {ready_functions}")
+    async def execute_functions_loop(self, plan, ready_functions, user_query, previous_results, context_id):
+        """Execute functions sequentially (no batching)."""
+        logger.debug(f"Executing {len(ready_functions)} functions sequentially: {ready_functions}")
         
-        # Create tasks for all ready functions
-        tasks = []
+        # Set context ID in all agent components before execution
+        self._set_context_for_agents(context_id)
+        
+        # Check for stop request before starting
+        if context_manager.get_context(context_id).get('stop_requested', False):
+            logger.info(f"Stop requested before executing {len(ready_functions)} functions")
+            return {}
+        
+        results = {}
+        
+        # Execute functions one by one
         for function_name in ready_functions:
-            task = self.soldier.execute(
-                plan=plan,
-                function_name=function_name,
-                user_query=user_query,
-                previous_results=previous_results
-            )
-            tasks.append(task)
-        
-        # Execute all functions concurrently
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Process results and handle any exceptions
-        execution_results = {}
-        for i, result in enumerate(results):
-            function_name = ready_functions[i]
-            if isinstance(result, Exception):
-                logger.error(f"Error executing {function_name}: {str(result)}")
-                execution_results[function_name] = {
+            # Check for stop request before each function
+            if context_manager.get_context(context_id).get('stop_requested', False):
+                logger.info(f"Stop requested during execution, stopping after {len(results)} functions")
+                return results
+            
+            try:
+                # Execute a single function
+                logger.info(f"Executing function: {function_name}")
+                result = await self.soldier.execute(
+                    plan=plan,
+                    function_name=function_name,
+                    user_query=user_query,
+                    previous_results=previous_results
+                )
+                
+                # Process the result
+                if isinstance(result, dict) and result.get("requires_modal_approval", False):
+                    logger.warning(f"Found requires_modal_approval flag - this should be handled by Commander")
+                    results[function_name] = result
+                else:
+                    # Add successful result
+                    results[function_name] = result # Limit the result to 300 characters
+                    
+                # Update previous_results after each function to make them available to subsequent functions
+                previous_results[function_name] = result # Limit the result to 300 characters
+                
+            except Exception as e:
+                # Handle exceptions
+                logger.error(f"Error executing function {function_name}: {str(e)}")
+                results[function_name] = {
                     "function": function_name,
-                    "error": str(result),
+                    "error": str(e),
                     "result": None
                 }
-            else:
-                execution_results[function_name] = result
+            
+            # Check for stop request after each function
+            if context_manager.get_context(context_id).get('stop_requested', False):
+                logger.info(f"Stop requested after executing {function_name}")
+                return results
                 
-        return execution_results
+        return results
+        
+    def _format_level_results(self, level_functions, level_results):
+        """Format level results for display in Slack."""
+        execution_output = "```\n"
+        for function_name in level_functions:
+            if function_name in level_results:
+                success = "✓" if level_results[function_name].get("error") is None else "✗"
+            else:
+                success = "?"
+            execution_output += f"{success} {function_name}\n"
+        execution_output += "```"
+        return execution_output
 
     async def process_slack_message(self, ai_request: AIRequest, thread_ts: Optional[str] = None, 
                                is_direct_message: bool = False, model_overrides: Optional[Dict[str, str]] = None):
@@ -683,32 +771,19 @@ class TMAISlackAgent:
         logger.debug(f"Generated conversation_key: {conversation_key} (DM: {is_direct_message})")
         
         # Apply any model overrides for this request
-        temp_model_config = self.model_config.copy()
         if model_overrides:
-            temp_model_config.update(model_overrides)
-            
-            # Re-initialize affected components with the overridden models
-            if "commander" in temp_model_config:
-                self.model_config["commander"] = temp_model_config["commander"]  # Update base model_config as well
-                logger.debug(f"Creating Commander with model: {temp_model_config['commander']}")
-                self.commander = Commander(model=temp_model_config["commander"], prompts=self.prompts)
-                
-            if "captain" in temp_model_config:
-                self.model_config["captain"] = temp_model_config["captain"]
-                logger.debug(f"Creating Captain with model: {temp_model_config['captain']}")
-                self.captain = Captain(model=temp_model_config["captain"], prompts=self.prompts)
-                
-            if "soldier" in temp_model_config:
-                self.model_config["soldier"] = temp_model_config["soldier"]
-                logger.debug(f"Creating Soldier with model: {temp_model_config['soldier']}")
-                self.soldier = Soldier(model=temp_model_config["soldier"], prompts=self.prompts)
+            logger.info(f"Applying model overrides: {model_overrides}")
+            # Use the new update_model_config method to update models if needed
+            self.update_model_config(model_overrides)
         
-        # Initialize progressive message handler
-        message_handler = ProgressiveMessageHandler(self.slack_client, ai_request.channel_id, ai_request.message_ts, effective_thread_ts)
-        
-        # Don't add all pending stages at the beginning anymore
-        # We'll add them as they become active
-        
+        # Initialize progress message handler
+        message_handler = ProgressiveMessageHandler(
+            slack_client=self.slack_client,
+            channel_id=ai_request.channel_id,
+            message_ts=ai_request.message_ts or "",
+            thread_ts=effective_thread_ts
+        )
+
         try:
             # Check rate limiting
             if not global_limiter.check_rate_limit():
@@ -738,8 +813,14 @@ class TMAISlackAgent:
             # Initialize stop_requested flag in context
             context_manager.add_context(context['context_id'], 'stop_requested', False)
             
+            # Store the message handler in the context for potential stop requests
+            context_manager.add_context(context['context_id'], 'message_handler', message_handler)
+            
             # Store the raw conversation history in the context for tool access
             context_manager.add_context(context['context_id'], 'conversation_history', conversation_manager.history)
+            
+            # Set context ID in all agent components to enable cancellation
+            self._set_context_for_agents(context['context_id'])
             
             # Send initial thinking message only if message_ts isn't already set (from app.py)
             if not ai_request.message_ts:
@@ -749,6 +830,47 @@ class TMAISlackAgent:
             urls = self.extract_urls(ai_request.text)
             if urls:
                 ai_request.urls = urls
+            
+            # Process image files if any
+            image_data = None
+            if ai_request.files:
+                headers = {
+                    "Authorization": f"Bearer {self.slack_bot_token}"
+                }
+                download_url = ai_request.files[0].get("url_private_download")
+                response = requests.get(download_url, headers=headers)
+                
+                # Encode the image bytes to base64 string
+                image_data = base64.b64encode(response.content).decode('utf-8')
+                logger.info(f"Successfully encoded image to base64, length: {len(image_data)} bytes")
+                
+                # Update stage for image analysis
+                message_handler.update_stage("Analyzing image content")
+                await message_handler.send_thinking_message(initial=False)
+                
+                # Call Commander.analyze_image directly
+                image_context = self.commander.analyze_image(image_data)
+                
+                # Mark image analysis stage as completed
+                message_handler.update_stage("Analyzing image content", completed=True)
+                
+                # Display image analysis results in a code block if available
+                if image_context:
+                    # Truncate if too long (for UI purposes)
+                    display_context = image_context
+                    if len(display_context) > 500:
+                        display_context = display_context[:497] + "..."
+                        
+                    image_analysis_output = f"```\nImage Analysis:\n{display_context}\n```"
+                    
+                    response = await asyncio.to_thread(
+                        self.slack_client.chat_postMessage,
+                        channel=ai_request.channel_id,
+                        thread_ts=effective_thread_ts,
+                        text=f"{image_analysis_output}"
+                    )
+                    # Track message ID for later deletion
+                    message_handler.progress_message_ids.append(response['ts'])
             
             # Initialize SlackClient for tool execution
             from ops_slack.slack_tools import SlackClient
@@ -770,10 +892,27 @@ class TMAISlackAgent:
             message_handler.update_stage("Commander assigning tasks")
             await message_handler.send_thinking_message(initial=False)
             
+            # Check if this is an image-only request (empty text but has files)
+            image_only_request = not ai_request.text.strip() and len(ai_request.files) > 0
+            
+            # Prepare the user query
+            if image_only_request:
+                user_query = f"Current prompt from user: {ai_request.sender_name} : [User uploaded an image]"
+                logger.info(f"Processing image-only request from {ai_request.sender_name}")
+            else:
+                user_query = f"Current prompt from user: {ai_request.sender_name} : {ai_request.text}"
+                
+                # If text is minimal but there are files, enhance the prompt
+                if len(ai_request.text.strip()) < 10 and len(ai_request.files) > 0:
+                    logger.info(f"Processing message with minimal text and attached files: '{ai_request.text}'")
+                    user_query += " [User also attached an image/file with this message]"
+            
             # Make the Commander API call
             commander_result = self.commander.assign_tasks(
-                user_query= "Current prompt from user: " + ai_request.sender_name + " : " + ai_request.text,
-                history=history_for_commander
+                user_query=user_query,
+                history=history_for_commander,
+                image_data=image_data,
+                image_context=image_context if 'image_context' in locals() else None
             )
             
             # Mark Commander stage as completed AFTER API call
@@ -896,6 +1035,66 @@ class TMAISlackAgent:
                     else:
                         logger.warning("Plan doesn't contain function_levels structure")
                     
+                    # Check if updateIssue is in the plan without filterIssues before it
+                    if 'function_levels' in current_plan:
+                        # Find updateIssue in the function levels
+                        update_issue_level = None
+                        update_issue_index = None
+                        filter_issues_before_update = False
+                        
+                        for level_idx, level in enumerate(current_plan['function_levels']):
+                            if 'updateIssue' in level:
+                                update_issue_level = level_idx
+                                update_issue_index = level.index('updateIssue')
+                                
+                                # Check if filterIssues appears in the same or earlier level
+                                for check_level_idx in range(level_idx + 1):
+                                    if check_level_idx == level_idx:
+                                        # If in same level, check if it's before updateIssue
+                                        if 'filterIssues' in level[:update_issue_index]:
+                                            filter_issues_before_update = True
+                                            break
+                                    else:
+                                        # If in earlier level, just check if it exists
+                                        if 'filterIssues' in current_plan['function_levels'][check_level_idx]:
+                                            filter_issues_before_update = True
+                                            break
+                                
+                                break  # Found updateIssue, no need to check further levels
+                        
+                        # If we need to add filterIssues
+                        if update_issue_level is not None and not filter_issues_before_update:
+                            logger.info("Found updateIssue without filterIssues before it - adding filterIssues")
+                            
+                            # Get parameters for filterIssues from updateIssue parameters
+                            update_params = {}
+                            for func_name in current_plan['function_levels'][update_issue_level]:
+                                if func_name == 'updateIssue' and 'parameters' in current_plan and func_name in current_plan['parameters']:
+                                    update_params = current_plan['parameters'][func_name]
+                                    break
+                            
+                            # Extract issue number
+                            issue_number = None
+                            if update_params:
+                                issue_number = update_params.get('issue_number') or update_params.get('issueNumber')
+                            
+                            # Add filterIssues as a new first level if issue_number is available
+                            if issue_number:
+                                # Create parameters for filterIssues
+                                if 'parameters' not in current_plan:
+                                    current_plan['parameters'] = {}
+                                
+                                current_plan['parameters']['filterIssues'] = {
+                                    'number': issue_number,
+                                    'limit': 1
+                                }
+                                
+                                # Add filterIssues to a new first level
+                                current_plan['function_levels'].insert(0, ['filterIssues'])
+                                
+                                # Update plan description
+                                current_plan['plan_description'] = "First, we need to see the content of that issue. " + current_plan.get('plan_description', '')
+                    
                     # Store plan in context
                     context_manager.add_context(context['context_id'], 'current_plan', current_plan)
                     
@@ -963,17 +1162,18 @@ class TMAISlackAgent:
                     
                     # Execute all functions in this level in parallel
                     try:
-                        level_results = await self.execute_batch(
+                        level_results = await self.execute_functions_loop(
                             plan=current_plan,
                             ready_functions=level_functions,
                             user_query=current_order,
-                            previous_results=execution_results
+                            previous_results=execution_results,
+                            context_id=context['context_id']  # Pass context_id for stop checks
                         )
                         
                         # Store level results for display
-                        all_level_results[f"level_{level_index+1}"] = level_results
+                        execution_output = self._format_level_results(level_functions, level_results)
                         
-                        # Update execution results with results from this level
+                        # Add results to the cumulative results
                         execution_results.update(level_results)
                         context_manager.add_context(context['context_id'], 'execution_results', execution_results)
                         
@@ -1100,14 +1300,93 @@ class TMAISlackAgent:
             # Mark Commander response as completed AFTER API call
             message_handler.update_stage("Commander generating response", completed=True)
             
-            # 6. Send final message and delete thinking message
-            await self._send_response(final_response, ai_request, effective_thread_ts)
-            # Delete all progress messages instead of just the thinking message
-            await message_handler.delete_all_progress_messages()
+            # Check for Linear actions requiring modal approval
+            linear_approval_needed = False
+            for func_name, result in execution_results.items():
+                if isinstance(result, dict) and result.get("requires_modal_approval", False):
+                    linear_approval_needed = True
+                    logger.info(f"Found Linear function {func_name} requiring modal approval")
+                    
+                    # Get context data
+                    channel_id = ai_request.channel_id
+                    thread_ts = effective_thread_ts
+                    
+                    # Initialize SlackModals for modal forms
+                    from ops_slack.slack_modals import SlackModals
+                    slack_modals = SlackModals(self.slack_client)
+                    
+                    # First send a message to get a trigger_id
+                    try:
+                        # Send the final response first
+                        await self._send_response(final_response, ai_request, effective_thread_ts)
+                        
+                        # Then send the approval request
+                        response = await asyncio.to_thread(
+                            self.slack_client.chat_postMessage,
+                            channel=channel_id,
+                            thread_ts=thread_ts,
+                            text=f"Please approve this Linear action",
+                            blocks=[
+                                {
+                                    "type": "section",
+                                    "text": {
+                                        "type": "mrkdwn",
+                                        "text": f"*Requesting approval*\nPlease review and approve the Linear {func_name} action"
+                                    }
+                                },
+                                {
+                                    "type": "actions",
+                                    "elements": [
+                                        {
+                                            "type": "button",
+                                            "text": {
+                                                "type": "plain_text",
+                                                "text": "Open Review Form",
+                                                "emoji": True
+                                            },
+                                            "style": "primary",
+                                            "value": json.dumps({
+                                                "action": "open_linear_modal",
+                                                "function": func_name,
+                                                "parameters": result.get('parameters', {}),
+                                                "context_id": context['context_id']
+                                            }),
+                                            "action_id": "open_linear_modal"
+                                        }
+                                    ]
+                                }
+                            ]
+                        )
+                        
+                        # Store pending approval details in context
+                        context_manager.add_context(
+                            context['context_id'], 
+                            f"pending_approval_{func_name}", 
+                            result
+                        )
+                        
+                        # Delete thinking message since we've already sent the response
+                        await message_handler.delete_all_progress_messages()
+                        
+                        # Add to conversation history
+                        await conversation_manager.add_message("user", ai_request.text, ai_request.message_ts)
+                        await conversation_manager.add_message("assistant", final_response)
+                        
+                        return
+                        
+                    except Exception as e:
+                        logger.error(f"Error creating approval message: {str(e)}")
+                        # Continue with normal flow if we can't send approval
             
-            # 7. Add to conversation history
-            await conversation_manager.add_message("user", ai_request.text, ai_request.message_ts)
-            await conversation_manager.add_message("assistant", final_response)
+            # 6. Send final message and delete thinking message (if no approval needed)
+            if not linear_approval_needed:
+                await self._send_response(final_response, ai_request, effective_thread_ts)
+                # Delete all progress messages instead of just the thinking message
+                await message_handler.delete_all_progress_messages()
+                
+                # 7. Add to conversation history
+                await conversation_manager.add_message("user", ai_request.text, ai_request.message_ts)
+                await conversation_manager.add_message("assistant", final_response)
             
             # Log execution time
             elapsed_time = time.time() - start_time
@@ -1182,50 +1461,288 @@ class TMAISlackAgent:
             
             # Find the context associated with this message
             context_id = None
-            for ctx_id, ctx in context_manager.contexts.items():
-                if ctx.get("channel_id") == channel_id:
-                    context_id = ctx_id
-                    break
+            
+            # First try with the exact thread_ts
+            if thread_ts:
+                context_id = f"{channel_id}:{thread_ts}"
+                if context_id not in context_manager.contexts:
+                    context_id = None
+            
+            # If not found, try a more flexible approach by searching all contexts in this channel
+            if not context_id:
+                for ctx_id, ctx in context_manager.contexts.items():
+                    if ctx.get("channel_id") == channel_id:
+                        # Either exact match, or it's the only context in this channel
+                        context_id = ctx_id
+                        break
             
             if not context_id:
-                logger.warning(f"Could not find context for stop request in channel {channel_id}")
-                return False
+                # If still not found, check if there are any active contexts
+                if context_manager.contexts:
+                    # As a last resort, mark ALL active contexts as stopped
+                    logger.warning(f"Could not find specific context for stop request in channel {channel_id}, stopping all active contexts")
+                    for ctx_id in context_manager.contexts:
+                        context_manager.add_context(ctx_id, "stop_requested", True)
+                    
+                    # Use the first context for UI updates
+                    context_id = next(iter(context_manager.contexts))
+                else:
+                    logger.error(f"No active contexts found for stop request in channel {channel_id}")
+                    return False
             
             logger.info(f"Stop requested by user {user_id} for context {context_id}")
             
-            # Just mark it in the context manager
+            # Mark this context as stopped
             context_manager.add_context(context_id, "stop_requested", True)
             
-            # Update the message to show that stopping was requested
+            # Find the message handler for this context if it exists in memory
+            # This is a quick way to access the message handler without having to recreate it
+            message_handler = None
+            active_context = context_manager.get_context(context_id)
+            if active_context and 'message_handler' in active_context:
+                message_handler = active_context.get('message_handler')
+            
+            # If we found a message handler, use it to delete all progress messages
+            if message_handler and hasattr(message_handler, 'delete_all_progress_messages'):
+                try:
+                    # Delete all progress messages immediately
+                    asyncio.create_task(message_handler.delete_all_progress_messages())
+                    logger.info(f"Deleted progress messages for context {context_id}")
+                except Exception as e:
+                    logger.error(f"Error deleting progress messages: {str(e)}")
+            else:
+                # If we don't have access to the message handler, at least try to delete the current message
+                try:
+                    await asyncio.to_thread(
+                        self.slack_client.chat_delete,
+                        channel=channel_id,
+                        ts=message_ts
+                    )
+                except SlackApiError as e:
+                    logger.error(f"Error deleting message: {e.response.get('error', '')}")
+            
+            # We'll send a message in the thread to acknowledge the stop
             try:
-                await asyncio.to_thread(
-                    self.slack_client.chat_update,
-                    channel=channel_id,
-                    ts=message_ts,
-                    text="Stopping processing...",
-                    blocks=[
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": "⚠️ *Processing stopped by user request*"
-                            }
-                        }
-                    ]
-                )
-                
-                # We'll also send a message in the thread to acknowledge
                 await asyncio.to_thread(
                     self.slack_client.chat_postMessage,
                     channel=channel_id,
                     thread_ts=thread_ts,
-                    text="Processing stopped by user request. Feel free to ask a new question."
+                    text="Processing stopped at your request. Feel free to ask a new question."
                 )
                 
                 return True
                 
             except SlackApiError as e:
-                logger.error(f"Error updating stop message: {e.response.get('error', '')}")
+                logger.error(f"Error sending stop acknowledgment: {e.response.get('error', '')}")
+                return False
+                
+        elif action_id in ["approve_linear_action", "decline_linear_action"]:
+            # Extract necessary information
+            try:
+                channel_id = payload.get("channel", {}).get("id")
+                message_ts = payload.get("message", {}).get("ts")
+                user_id = payload.get("user", {}).get("id")
+                thread_ts = payload.get("container", {}).get("thread_ts") or payload.get("message", {}).get("thread_ts")
+                value = json.loads(action.get("value", "{}"))
+                
+                # Get the context ID from the value
+                context_id = value.get("context_id")
+                if not context_id:
+                    logger.error("No context_id found in button value")
+                    return False
+                
+                function_name = value.get("function")
+                
+                # Get the pending approval from the context
+                context = context_manager.get_context(context_id)
+                if not context:
+                    logger.error(f"No context found for ID {context_id}")
+                    return False
+                
+                pending_approval = context.get(f"pending_approval_{function_name}")
+                if not pending_approval:
+                    logger.error(f"No pending approval found for function {function_name}")
+                    return False
+                
+                # Update the approval message
+                await asyncio.to_thread(
+                    self.slack_client.chat_update,
+                    channel=channel_id,
+                    ts=message_ts,
+                    text=f"Linear Action: {action_id == 'approve_linear_action' and 'Approved' or 'Declined'}",
+                    blocks=[
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"*Linear Action {action_id == 'approve_linear_action' and 'Approved ✅' or 'Declined ❌'}*\n{function_name}"
+                            }
+                        }
+                    ]
+                )
+                
+                # If approved, execute the function with the parameters
+                if action_id == "approve_linear_action":
+                    # Get the parameters from the value
+                    parameters = value.get("parameters", {})
+                    parameters["approved"] = True
+                    
+                    # Execute the function
+                    try:
+                        # This assumes Soldier.execute is implemented to handle this case
+                        result = await self.soldier.execute(
+                            plan={},  # Empty plan as we're executing directly
+                            function_name=function_name,
+                            user_query="",  # No user query needed for direct execution
+                            previous_results={},  # No previous results needed
+                            function_args=parameters
+                        )
+                        
+                        # Send a message with the result
+                        await asyncio.to_thread(
+                            self.slack_client.chat_postMessage,
+                            channel=channel_id,
+                            thread_ts=thread_ts,
+                            text=f"Successfully executed {function_name}: {result.get('result', 'No result')}"
+                        )
+                    except Exception as e:
+                        logger.error(f"Error executing approved function {function_name}: {str(e)}")
+                        # Send error message
+                        await asyncio.to_thread(
+                            self.slack_client.chat_postMessage,
+                            channel=channel_id,
+                            thread_ts=thread_ts,
+                            text=f"Error executing {function_name}: {str(e)}"
+                        )
+                else:
+                    # Declined - just send a message
+                    await asyncio.to_thread(
+                        self.slack_client.chat_postMessage,
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        text=f"Action {function_name} was declined."
+                    )
+                
+                # Remove the pending approval from the context
+                context_manager.remove_from_context(context_id, f"pending_approval_{function_name}")
+                
+                return True
+            except Exception as e:
+                logger.error(f"Error handling Linear approval: {str(e)}")
+                return False
+        
+        elif action_id == "open_linear_modal":
+            # Extract necessary information
+            try:
+                channel_id = payload.get("channel", {}).get("id")
+                message_ts = payload.get("message", {}).get("ts")
+                user_id = payload.get("user", {}).get("id")
+                thread_ts = payload.get("container", {}).get("thread_ts") or payload.get("message", {}).get("thread_ts")
+                trigger_id = payload.get("trigger_id")
+                value = json.loads(action.get("value", "{}"))
+                
+                if not trigger_id:
+                    logger.error("No trigger_id in payload, can't open modal")
+                    return False
+                
+                # Get the context ID from the value
+                context_id = value.get("context_id")
+                if not context_id:
+                    logger.error("No context_id found in button value")
+                    return False
+                
+                function_name = value.get("function")
+                parameters = value.get("parameters", {})
+                
+                # Get the pending approval from the context
+                context = context_manager.get_context(context_id)
+                if not context:
+                    logger.error(f"No context found for ID {context_id}")
+                    return False
+                
+                # Initialize SlackModals
+                from ops_slack.slack_modals import SlackModals
+                slack_modals = SlackModals(self.slack_client)
+                
+                # Open appropriate modal based on function
+                if function_name == "createIssue":
+                    # Open create issue modal
+                    await slack_modals.open_create_issue_modal(
+                        trigger_id=trigger_id,
+                        prefilled_data=parameters,
+                        conversation_id=f"{channel_id}:{thread_ts}"
+                    )
+                    
+                    # Update the button message to show modal was opened
+                    await asyncio.to_thread(
+                        self.slack_client.chat_update,
+                        channel=channel_id,
+                        ts=message_ts,
+                        text="Creating a new Linear issue",
+                        blocks=[
+                            {
+                                "type": "section",
+                                "text": {
+                                    "type": "mrkdwn",
+                                    "text": "*Issue creation form opened*\nPlease complete the form to create the issue."
+                                }
+                            }
+                        ]
+                    )
+                    
+                elif function_name == "updateIssue":
+                    # Get issue number from parameters
+                    issue_number = parameters.get("issue_number") or parameters.get("issueNumber")
+                    
+                    if not issue_number:
+                        logger.error("No issue number found in parameters")
+                        return False
+                    
+                    # Open update issue modal
+                    await slack_modals.open_update_issue_modal(
+                        trigger_id=trigger_id,
+                        issue_number=issue_number,
+                        prefilled_data=parameters,
+                        conversation_id=f"{channel_id}:{thread_ts}"
+                    )
+                    
+                    # Update the button message to show modal was opened
+                    await asyncio.to_thread(
+                        self.slack_client.chat_update,
+                        channel=channel_id,
+                        ts=message_ts,
+                        text="Updating Linear issue",
+                        blocks=[
+                            {
+                                "type": "section",
+                                "text": {
+                                    "type": "mrkdwn",
+                                    "text": f"*Issue update form opened*\nPlease complete the form to update issue #{issue_number}."
+                                }
+                            }
+                        ]
+                    )
+                    return True
+                
+                return True
+                
+            except Exception as e:
+                logger.error(f"Error opening Linear modal: {str(e)}")
+                
+                # Try to send an error message
+                try:
+                    channel_id = payload.get("channel", {}).get("id")
+                    thread_ts = payload.get("container", {}).get("thread_ts") or payload.get("message", {}).get("thread_ts")
+                    
+                    await asyncio.to_thread(
+                        self.slack_client.chat_postMessage,
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        text=f"Error opening form: {str(e)}"
+                    )
+                except Exception:
+                    pass
+                    
                 return False
         
         return False 

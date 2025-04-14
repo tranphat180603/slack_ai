@@ -62,7 +62,22 @@ logger.info("Environment variables loaded")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 SLACK_USER_TOKEN = os.environ.get("SLACK_USER_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-AI_MODEL = os.environ.get("AI_MODEL", "o3-mini")
+
+# Get model configuration (allowing different models for different components)
+DEFAULT_AI_MODEL = os.environ.get("AI_MODEL", "o3-mini")
+COMMANDER_MODEL = os.environ.get("COMMANDER_MODEL", DEFAULT_AI_MODEL)
+CAPTAIN_MODEL = os.environ.get("CAPTAIN_MODEL", DEFAULT_AI_MODEL)
+SOLDIER_MODEL = os.environ.get("SOLDIER_MODEL", DEFAULT_AI_MODEL)
+
+# Create model configuration
+MODEL_CONFIG = {
+    "commander": COMMANDER_MODEL,
+    "captain": CAPTAIN_MODEL,
+    "soldier": SOLDIER_MODEL
+}
+
+# Log model configuration
+logger.info(f"Using models: Commander={COMMANDER_MODEL}, Captain={CAPTAIN_MODEL}, Soldier={SOLDIER_MODEL}")
 
 if not SLACK_BOT_TOKEN:
     logger.error("SLACK_BOT_TOKEN not found in environment variables")
@@ -125,7 +140,8 @@ agent = TMAISlackAgent(
     slack_bot_token=SLACK_BOT_TOKEN,
     slack_user_token=SLACK_USER_TOKEN,
     openai_api_key=OPENAI_API_KEY,
-    ai_model=AI_MODEL,
+    ai_model=DEFAULT_AI_MODEL,
+    model_config=MODEL_CONFIG,
     prompts=PROMPTS
 )
 
@@ -153,15 +169,29 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
             
             logger.info(f"Processing event ID: {event_id}, Type: {event_type}")
             
-            # Skip message subtypes (like bot messages, updates, etc.)
-            if event.get("subtype"):
+            # For file_shared events, just log it and return - we'll handle the file when processing the message
+            if event_type == "file_shared":
+                logger.info(f"Received file_shared event, will process with related message")
                 return {}
+            
+            # Skip message subtypes (like bot messages, updates, etc.)
+            # EXCEPT for file_share subtype which we need to process for images
+            subtype = event.get("subtype")
+            if subtype and subtype != "file_share":
+                logger.info(f"Skipping message subtype: {subtype}")
+                return {}
+            
+            # Special handling for file_share subtype
+            if subtype == "file_share":
+                logger.info(f"Processing file_share message subtype")
             
             # Handle direct messages to the bot
             if event_type == "message" and channel_type == "im":
                 # Skip if no text content or if it's a bot message or processing message
+                # BUT don't skip if it's a file_share subtype
                 text = event.get("text", "")
-                if not text.strip() or event.get("bot_id") or "TMAI's neuron firing..." in text:
+                if (not text.strip() and subtype != "file_share") or event.get("bot_id") or "TMAI's neuron firing..." in text:
+                    logger.info(f"Skipping message: empty text={not text.strip()}, bot_id={event.get('bot_id') is not None}")
                     return {}
                 
                 # Extract required data
@@ -169,6 +199,9 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
                 channel_id = event.get("channel", "")
                 message_ts = event.get("ts", "")
                 thread_ts = event.get("thread_ts", message_ts)
+                
+                # Get files if any
+                files = event.get("files", [])
                 
                 # Get sender name
                 sender_name = "User"  # Default fallback
@@ -188,6 +221,7 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
                     channel_id=channel_id,
                     message_ts=message_ts,
                     thread_ts=thread_ts,
+                    files=files,
                     sender_name=sender_name
                 )
                 
@@ -247,6 +281,9 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
                 message_ts = event.get("ts", "")
                 thread_ts = event.get("thread_ts", message_ts)
                 
+                # Get files if any
+                files = event.get("files", [])
+                
                 # Remove bot mention from text (matches <@BOTID>)
                 text = text.replace(f"<@{os.environ.get('SLACK_BOT_ID', 'U08GNQ8F2RH')}>", "").strip()
                 
@@ -265,6 +302,8 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
                     user_id=user_id,
                     channel_id=channel_id,
                     message_ts=message_ts,
+                    thread_ts=thread_ts,
+                    files=files,
                     sender_name=sender_name
                 )
                 
@@ -325,6 +364,31 @@ async def ai_command(request: Request):
     """Handle Slack slash commands."""
     return {"message": "AI command received"}
 
+@app.get("/debug/contexts")
+async def debug_contexts():
+    """Debug endpoint to view active contexts (ONLY for development/debugging)"""
+    # Only enable in development mode
+    if os.environ.get("ENVIRONMENT", "").lower() != "development":
+        return {"error": "Debug endpoints only available in development mode"}
+    
+    from context_manager import context_manager
+    
+    # Get a sanitized view of all contexts
+    contexts_info = {}
+    for ctx_id, ctx in context_manager.contexts.items():
+        contexts_info[ctx_id] = {
+            "created_at": ctx.get("created_at", 0),
+            "channel_id": ctx.get("channel_id", "unknown"),
+            "user_id": ctx.get("user_id", "unknown"),
+            "stop_requested": ctx.get("stop_requested", False),
+            "user_query": ctx.get("user_query", "")[:50] + "..." if len(ctx.get("user_query", "")) > 50 else ctx.get("user_query", ""),
+        }
+    
+    return {
+        "active_contexts": len(context_manager.contexts),
+        "contexts": contexts_info
+    }
+
 @app.post("/slack/interactivity")
 async def slack_interactivity(request: Request, background_tasks: BackgroundTasks):
     """Handle Slack interactive components (buttons, menus, etc.)"""
@@ -343,6 +407,139 @@ async def slack_interactivity(request: Request, background_tasks: BackgroundTask
         payload = json.loads(payload_str)
         logger.debug(f"Received interaction payload type: {payload.get('type')}")
         
+        # Handle view submissions (from modals)
+        if payload.get("type") == "view_submission":
+            # Initialize SlackModals
+            from ops_slack.slack_modals import SlackModals
+            slack_modals = SlackModals(agent.slack_client)
+            
+            # Extract metadata and callback_id before processing
+            view = payload.get("view", {})
+            callback_id = view.get("callback_id", "")
+            metadata_str = view.get("private_metadata", "{}")
+            metadata = {}
+            channel_id = None
+            
+            try:
+                metadata = json.loads(metadata_str)
+                conversation_id = metadata.get("conversation_id")
+                if conversation_id and ":" in conversation_id:
+                    channel_id = conversation_id.split(":")[0]
+            except (json.JSONDecodeError, Exception) as e:
+                logger.error(f"Error extracting metadata: {str(e)}")
+            
+            # For Linear issue creation/update, immediately acknowledge to prevent timeout
+            if callback_id in ["linear_create_issue_modal", "linear_update_issue_modal"]:
+                logger.info(f"Immediately acknowledging {callback_id} to prevent timeout")
+                
+                # Extract form state for background processing
+                form_state = view.get("state", {}).get("values", {})
+                user_id = payload.get("user", {}).get("id")
+                
+                # Define background task to process the Linear operation
+                async def process_linear_operation():
+                    try:
+                        # Process the submission in the background
+                        result = await slack_modals.handle_view_submission(payload)
+                        logger.info(f"Background view submission result: {result.get('success')}, message: {result.get('message')}")
+                        
+                        # Send confirmation message
+                        if result.get("success") and channel_id:
+                            try:
+                                await asyncio.sleep(0.5)  # Small delay
+                                agent.slack_client.chat_postMessage(
+                                    channel=channel_id,
+                                    text=f":white_check_mark: {result.get('message')}"
+                                )
+                            except Exception as e:
+                                logger.error(f"Error sending confirmation: {str(e)}")
+                        elif not result.get("success") and channel_id:
+                            # Send error message
+                            try:
+                                await asyncio.sleep(0.5)  # Small delay
+                                agent.slack_client.chat_postMessage(
+                                    channel=channel_id,
+                                    text=f":x: Error: {result.get('message')}"
+                                )
+                            except Exception as e:
+                                logger.error(f"Error sending error message: {str(e)}")
+                    except Exception as e:
+                        logger.error(f"Error in background Linear operation: {str(e)}")
+                        if channel_id:
+                            try:
+                                agent.slack_client.chat_postMessage(
+                                    channel=channel_id,
+                                    text=f":x: An error occurred while processing your request: {str(e)}"
+                                )
+                            except Exception:
+                                pass
+                
+                # Schedule the background task
+                background_tasks.add_task(process_linear_operation)
+                
+                # Return immediate success to close the modal
+                return {"response_action": "clear"}
+            
+            # For all other modal types, process normally
+            # Process the submission
+            result = await slack_modals.handle_view_submission(payload)
+            
+            logger.info(f"View submission result: {result.get('success')}, message: {result.get('message')}")
+            # Add more detailed debug logging
+            logger.debug(f"Full result from handle_view_submission: {result}")
+            
+            # If successful, acknowledge with an empty response to close the modal
+            if result.get("success"):
+                # Send a message to the user about the completed action
+                user_id = payload.get("user", {}).get("id")
+                
+                # If we found a channel, send a message
+                if channel_id:
+                    try:
+                        # Define a background function to send the message
+                        async def send_success_message():
+                            try:
+                                await asyncio.sleep(0.5)  # Small delay to ensure modal closes first
+                                agent.slack_client.chat_postMessage(
+                                    channel=channel_id,
+                                    text=f":white_check_mark: {result.get('message')}"
+                                )
+                            except Exception as e:
+                                logger.error(f"Error in background message task: {str(e)}")
+                        
+                        # Add the task to background tasks
+                        background_tasks.add_task(send_success_message)
+                    except Exception as e:
+                        logger.error(f"Error scheduling success message: {str(e)}")
+                    
+                # Return empty response to close the modal - must be {} not None
+                return {
+                    "response_action": "clear"
+                }
+            else:
+                # Return errors to display in the modal
+                # For simplicity, show a general error message for now
+                error_message = result.get("message", "An error occurred")
+                logger.warning(f"Returning error to Slack modal: {error_message}")
+                
+                # Format error response according to Slack's requirements
+                # https://api.slack.com/surfaces/modals/using#handling_submissions
+                errors = {}
+                
+                # Try to show error in the most appropriate block
+                if "title" in error_message.lower():
+                    errors["title_block"] = error_message
+                elif "description" in error_message.lower():
+                    errors["description_block"] = error_message
+                else:
+                    # Default to showing error in title block
+                    errors["title_block"] = error_message
+                
+                return {
+                    "response_action": "errors",
+                    "errors": errors
+                }
+        
         # CRITICAL: Return a 200 OK immediately if this is a stop action
         # This ensures we stay within Slack's 3-second timeout window
         if payload.get("type") == "block_actions":
@@ -354,7 +551,9 @@ async def slack_interactivity(request: Request, background_tasks: BackgroundTask
                     payload
                 )
                 logger.info("Stop button clicked, returning immediate acknowledgment")
-                return {"response_action": "update", "text": "Stopping..."}
+                # Immediately acknowledge with a simple message
+                # The actual UI will be updated by the background task
+                return {"response_action": "clear"}
             else:
                 # Other button clicks
                 background_tasks.add_task(

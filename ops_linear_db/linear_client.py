@@ -120,7 +120,35 @@ class LinearClient:
         except Exception as e:
             raise LinearError(f"Unexpected error: {str(e)}")
         
-    def getCurrentUser(self, slack_display_name: str) -> dict:
+    def getAllTeams(self) -> List:
+        return [
+            {
+                "key": "ENG",
+                "name": "Engineering"
+            },
+            {
+                "key": "OPS",
+                "name": "Operations"
+            },
+            {
+                "key": "MKT",
+                "name": "Marketing"
+            },
+            {
+                "key": "PRO",
+                "name": "Product"
+            },
+            {
+                "key": "RES",
+                "name": "Research"
+            },
+            {
+                "key": "AI",
+                "name": "AI"
+            }
+        ]
+        
+    def getCurrentUser(self, slack_display_name: str = None) -> dict:
         users_info = {
             '@Talha': {'linear_display_name': 'talha', 'team': 'MKT'},
             '@Val': {'linear_display_name': 'val', 'team': 'PRO'},
@@ -161,7 +189,10 @@ class LinearClient:
             '@Agustín Gamoneda': {'linear_display_name': 'agustin', 'team': 'MKT'},
             '@Peterson': {'linear_display_name': 'peterson', 'team': 'ENG'}
         }
-        return users_info.get(slack_display_name, None)
+        if slack_display_name:
+            return users_info.get(slack_display_name, None)
+        else:
+            return users_info
 
     def getAllUsers(self, teamKey: str) -> List[dict]:
         """
@@ -205,7 +236,7 @@ class LinearClient:
             raise LinearNotFoundError(f"Team '{teamKey}' not found")
             
         team_members = teams[0].get("members", {}).get("nodes", [])
-        # Only filter by active status if the field exists, otherwise return all members
+        # Only filter by active status if the field exists, otherwise return all members  
         return [user for user in team_members if user.get("active", True)]
     
     def getAllIssues(self, teamKey: str, limit: int = 3, filters: dict = None):
@@ -423,7 +454,7 @@ class LinearClient:
     # Detailed & Filtered Data Functions
     # ---------------------------
     
-    def filterIssues(self, criteria: dict, limit: int = None):
+    def filterIssues(self, criteria: dict, limit: int = None, include_description: bool = True):
         """
         Return issues matching a generic criteria object.
         Example criteria:
@@ -432,70 +463,85 @@ class LinearClient:
             "state": { "name": { "eq": "In Progress" } },
             "priority": { "eq": "high" }
           }
+        
+        Args:
+            criteria: Dictionary of filter criteria
+            limit: Maximum number of issues to return
+            include_description: If False, strip description field from results
         """
-        query = gql("""
-        query ($filter: IssueFilter, $first: Int) {
+        # Define the query fields based on include_description parameter
+        description_field = "description" if include_description else ""
+        
+        query_string = f"""
+        query ($filter: IssueFilter, $first: Int) {{
           issues(
             filter: $filter,
             first: $first
-          ) {
-            nodes {
+          ) {{
+            nodes {{
               id
               number
               title
-              description
+              {description_field}
               priority
               estimate
-              cycle {
+              cycle {{
                 id
                 number
-              }
-              state {
+              }}
+              state {{
                 id
                 name
                 type
-              }
-              assignee {
+              }}
+              assignee {{
                 id
                 displayName
-              }
-              project {
+              }}
+              project {{
                 id
                 name
-              }
-              team {
+              }}
+              team {{
                 id
                 key
-              }
-              labels {
-                nodes {
+              }}
+              labels {{
+                nodes {{
                   id
                   name
                   color
-                }
-              }
-              parent {
+                }}
+              }}
+              parent {{
                 id
                 number
                 title
-              }
-              children {
-                nodes {
+              }}
+              children {{
+                nodes {{
                   id
                   number
                   title
-                }
-              }
-            }
-          }
-        }
-        """)
+                }}
+              }}
+            }}
+          }}
+        }}
+        """
+        
+        query = gql(query_string)
         variables = {"filter": criteria}
         if limit is not None:
             variables["first"] = limit
             
         result = self._execute_query(query, variables)
-        return result.get("issues", {}).get("nodes", [])
+        issues = result.get("issues", {}).get("nodes", [])
+        
+        # No need to strip descriptions since we didn't request them
+        # If include_description is False
+        
+        return issues
     
     def filterUsers(self, criteria: dict):
         """Return users matching the provided criteria."""
@@ -514,6 +560,66 @@ class LinearClient:
         variables = {"filter": criteria}
         result = self._execute_query(query, variables)
         return result.get("users", {}).get("nodes", [])
+    
+    def getUserByName(self, display_name: str, team_key: str = None):
+        """
+        Find a user by display name with their complete details including ID.
+        
+        Args:
+            display_name: The display name to search for (case insensitive)
+            team_key: Optional team key to narrow down the search
+            
+        Returns:
+            User object with id, displayName, and active status or None if not found
+        """
+        query = gql("""
+        query {
+          users(first: 100) {
+            nodes {
+              id
+              displayName
+              email
+              active
+              teams {
+                nodes {
+                  key
+                }
+              }
+            }
+          }
+        }
+        """)
+        
+        result = self._execute_query(query, {})
+        users = result.get("users", {}).get("nodes", [])
+        
+        # Create a normalized version of the display name for case-insensitive comparison
+        normalized_name = display_name.lower().strip()
+        
+        # Filter by display name
+        matching_users = [
+            u for u in users 
+            if u.get("displayName") and normalized_name == u.get("displayName").lower().strip()
+        ]
+        
+        # If team_key is provided, filter by team membership
+        if team_key and matching_users:
+            team_users = []
+            for user in matching_users:
+                # Check if user belongs to the specified team
+                teams = user.get("teams", {}).get("nodes", [])
+                if any(t.get("key") == team_key for t in teams):
+                    team_users.append(user)
+            
+            # If any users match both name and team, return the first one
+            if team_users:
+                return team_users[0]
+        
+        # If we found matches and no team filtering was applied or no team-specific matches
+        if matching_users:
+            return matching_users[0]
+            
+        return None
     
     def filterProjects(self, criteria: dict):
         """Return projects matching the provided criteria."""
@@ -537,6 +643,13 @@ class LinearClient:
                   id
                   key
                   name
+                }
+              }
+              issues {
+                nodes {
+                  id
+                  number
+                  title
                 }
               }
             }
@@ -896,33 +1009,38 @@ class LinearClient:
 
     def createComment(self, issueNumber: int, commentData: dict):
         """Add a comment to an issue."""
-        query = gql("""
-        mutation ($issueNumber: Int!, $input: CommentCreateInput!) {
-          commentCreate(issueNumber: $issueNumber, input: $input) {
-            comment {
-              id
-              number
-              body
-              user {
-                id
-                displayName
-              }
-            }
-          }
-        }
-        """)
-        variables = {"issueNumber": issueNumber, "input": commentData}
-        result = self._execute_query(query, variables)
-        return result.get("commentCreate", {}).get("comment", {})
-        
+        # First get the issue ID from the issue number by using filterIssues
+        try:
+            issue_criteria = {"number": {"eq": issueNumber}}
+            issues = self.filterIssues(issue_criteria)
+            
+            if not issues or len(issues) == 0:
+                raise LinearNotFoundError(f"Issue with number {issueNumber} not found")
+                
+            issueId = issues[0].get("id")
+            if not issueId:
+                raise LinearError(f"Issue with number {issueNumber} found but has no ID")
+                
+            # Now create comment using the issue ID
+            return self.createCommentById(issueId, commentData)
+            
+        except Exception as e:
+            raise LinearError(f"Error creating comment: {str(e)}")
+
     def createCommentById(self, issueId: str, commentData: dict):
         """Add a comment to an issue using the issue ID instead of number."""
+        # The Linear API expects the issueId inside the input object
+        if not isinstance(commentData, dict):
+            commentData = {}
+        
+        # Add issueId to the input
+        commentData["issueId"] = issueId
+        
         query = gql("""
-        mutation ($id: String!, $input: CommentCreateInput!) {
-          commentCreate(id: $id, input: $input) {
+        mutation ($input: CommentCreateInput!) {
+          commentCreate(input: $input) {
             comment {
               id
-              number
               body
               user {
                 id
@@ -932,7 +1050,7 @@ class LinearClient:
           }
         }
         """)
-        variables = {"id": issueId, "input": commentData}
+        variables = {"input": commentData}
         result = self._execute_query(query, variables)
         return result.get("commentCreate", {}).get("comment", {})
     
