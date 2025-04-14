@@ -18,12 +18,24 @@ COPY requirements.txt .
 RUN pip install httpx==0.27.0 && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy application code and wait-for-it script
-COPY . .
+# Copy all directories by name to ensure correct structure
+COPY ops_linear_db/ /app/ops_linear_db/
+COPY ops_conversation_db/ /app/ops_conversation_db/
+COPY ops_slack/ /app/ops_slack/
+COPY app/ /app/app/
+COPY tools/ /app/tools/
+COPY llm/ /app/llm/
+COPY prompts/ /app/prompts/
+COPY *.py /app/
 COPY wait-for-it.sh .
 
 # Make wait-for-it.sh executable
 RUN chmod +x wait-for-it.sh
+
+# Verify directory structure
+RUN ls -la /app && \
+    ls -la /app/ops_linear_db && \
+    ls -la /app/ops_conversation_db
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
