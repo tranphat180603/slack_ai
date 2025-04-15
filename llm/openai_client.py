@@ -123,6 +123,8 @@ class TokenUsageTracker:
         # Define approximate costs per 1M tokens for different models
         # These are estimates and should be updated as prices change
         costs = {
+            "gpt-4.1-2025-04-14": {"input": 2.0, "cached": 0.50, "output": 8.0},    # $2.0/1M input, $0.50/1M cached, $8.0/1M output
+            "gpt-4.1-nano-2025-04-14": {"input": 0.2, "cached": 0.1, "output": 1.0},    # $0.2/1M input, $0.1/1M cached, $1.0/1M output
             "gpt-4o": {"input": 2.5, "cached": 1.25, "output": 10.0},    # $2.5/1M input, $1.25/1M cached, $10/1M output
             "gpt-4o-mini": {"input": 0.15, "cached": 0.075, "output": 0.6}, # $0.15/1M input, $0.075/1M cached, $0.6/1M output
             "o1-mini": {"input": 3.0, "cached": 1.5, "output": 15.0},    # Claude 3.5 Sonnet ($3/1M input, $1.5/1M cached, $15/1M output)
@@ -209,7 +211,7 @@ class OpenaiClient(ABC):
         # Handle image input if provided
         if image_data and (
             "vision" in self.model or
-            self.model.startswith("gpt-4o") or  # This will match gpt-4o, gpt-4o-mini, gpt-4o-2024-11-20, etc.
+            self.model.startswith("gpt-4") or  # This will match gpt-4o, gpt-4o-mini, gpt-4o-2024-11-20, etc.
             "gpt-4" in self.model  # For other gpt-4 variants with vision
         ):
             logger.info(f"Adding image content to message with model {self.model}")
@@ -644,6 +646,8 @@ class OpenaiClient(ABC):
             costs = {
                 "gpt-4o": {"input": 2.5, "cached": 1.25, "output": 10.0},
                 "gpt-4o-mini": {"input": 0.15, "cached": 0.075, "output": 0.6},
+                "gpt-4.1-2025-04-14": {"input": 2.0, "cached": 0.50, "output": 8.0},
+                "gpt-4.1-nano-2025-04-14": {"input": 0.1, "cached": 0.025, "output": 0.4},
                 "o1-mini": {"input": 3.0, "cached": 1.5, "output": 15.0},
                 "o1": {"input": 15.0, "cached": 7.5, "output": 60.0},
                 "o3-mini": {"input": 1.1, "cached": 0.55, "output": 4.4},

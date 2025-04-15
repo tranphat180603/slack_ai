@@ -350,7 +350,7 @@ Evaluate the relevance of each document to the query and return a JSON array of 
         
         # Call the OpenAI API for reranking
         response = client.chat.completions.create(
-            model="gpt-4o-mini",  # Use a smaller model for efficiency
+            model="gpt-4.1-nano-2025-04-14",  # Use a smaller model for efficiency
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": system_prompt},

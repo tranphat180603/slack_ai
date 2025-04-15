@@ -531,13 +531,13 @@ class Commander:
         # Format the prompt using template
         formatted = self.format_prompt("commander.response", prompt_vars)
         
-        # Create a new OpenaiClient with gpt-4o-mini model specifically for this response
+        # Create a new OpenaiClient with gpt-4.1-2025-04-14 model specifically for this response
         from llm.openai_client import OpenaiClient
-        response_client = OpenaiClient(os.getenv("OPENAI_API_KEY"), model="gpt-4o")
+        response_client = OpenaiClient(os.getenv("OPENAI_API_KEY"), model="gpt-4.1-2025-04-14")
         
         # Log the final prompt sent to the API
         if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"[Commander] Sending prompt to API for response using gpt-4o:\nSystem: {formatted['system']}\nUser: {formatted['user']}")
+            logger.debug(f"[Commander] Sending prompt to API for response using gpt-4.1-2025-04-14:\nSystem: {formatted['system']}\nUser: {formatted['user']}")
         
         try:
             # Always use the response function with the new client
@@ -603,7 +603,7 @@ class Commander:
             
             # Call the vision model to analyze the image
             # Make sure to use a model that supports vision
-            vision_model = "gpt-4o-mini"  # gpt-4o has vision capabilities
+            vision_model = "gpt-4.1-nano-2025-04-14"  # gpt-4.1 has vision capabilities
             logger.info(f"[Commander] Using vision model: {vision_model}")
             image_module_client = OpenaiClient(os.getenv("OPENAI_API_KEY"), model=vision_model)
             
