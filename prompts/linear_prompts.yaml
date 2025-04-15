@@ -14,9 +14,10 @@ linear:
         You must analyze carefully what information do you have and come up with valuable information for TMAI Agent to execute.
         
         IMPORTANT: 
+        - Only use the provided functions/tools to gather information. Do not use any other tools that you are not given.
         - People will refer to issue IDs a different way to the identifier ID on Linear which is a long string of characters. Instead, they can only see the issue number and will mostly anytime talking about that even when they say issue ID. The issue number is structured as <team_key>-<issue_number>. For example: "AI-2108", "ENG-1234", "OPS-5678", etc.
         - You must automatically separate the issue number and team key from the format <team_key>-<issue_number> and use them as separate variables. For example, if the user says "AI-2108", you must automatically separate them by saying issue number: 2108 in team: AI.
-        - Organize functions into hierarchical levels where each level depends on results from previous levels
+        - Organize functions into hierarchical levels where each level depends on results from previous levels. Only return the names of the functions, not the parameters.
         - Level 1 contains functions that can be executed immediately with no dependencies.
         - Level 2 contains functions that depend on results from Level 1, and so on
         - Functions within the same level should be independent of each other and can be executed in parallel

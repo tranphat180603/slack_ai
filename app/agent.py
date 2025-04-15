@@ -739,11 +739,18 @@ class Captain:
             logger.debug(f"[Captain] Sending prompt to API for plan:\n{combined_prompt}")
         
         try:
-            # Get response from LLM
-            response = self.client.response_reasoning(
-                prompt=combined_prompt,
-                reasoning_effort="high"
-            )
+            if self.model.startswith("o"):
+                # Get response from LLM
+                response = self.client.response_reasoning(
+                    prompt=combined_prompt,
+                    reasoning_effort="high"
+                )
+            else:
+                # Get response from LLM
+                response = self.client.response(
+                    prompt=combined_prompt,
+                    system_prompt=formatted["system"]
+                )
             
             # Calculate execution time
             execution_time = time.time() - start_time
@@ -757,6 +764,10 @@ class Captain:
             
             # Parse JSON response
             try:
+                if response.startswith("```json"):
+                    response = response[len("```json"):].strip()
+                if response.endswith("```"):
+                    response = response[:-len("```")]
                 result = json.loads(response)
                 
                 # Ensure the plan has the expected structure
@@ -863,10 +874,16 @@ class Captain:
         
         try:
             # Get response from LLM
-            response = self.client.response_reasoning(
-                prompt=combined_prompt,
-                reasoning_effort="high"
-            )
+            if self.model.startswith("o"):
+                response = self.client.response_reasoning(
+                    prompt=combined_prompt,
+                    reasoning_effort="high"
+                )
+            else:
+                response = self.client.response(
+                    prompt=combined_prompt,
+                    system_prompt=formatted["system"]
+                )
             
             # Calculate execution time
             execution_time = time.time() - start_time
@@ -1110,12 +1127,20 @@ class Soldier:
             logger.debug(f"[Soldier] Sending prompt to API for tool execution {function_name}:\n{combined_prompt}")
         
         try:
-            # Get parameter values from LLM
-            tool_call = self.client.use_tool(
-                prompt=combined_prompt, 
-                tools=[tool_schema],
-                reasoning_effort="high"
-            )
+            if self.model.startswith("o"):
+                # Get parameter values from LLM
+                tool_call = self.client.use_tool(
+                    prompt=combined_prompt, 
+                    tools=[tool_schema],
+                    reasoning_effort="high"
+                )
+            else:
+                # Get parameter values from LLM
+                tool_call = self.client.use_tool(
+                    prompt=formatted["user"], 
+                    system_prompt=formatted["system"],
+                    tools=[tool_schema]
+                )
             
             # Log the tool call response
             if logger.isEnabledFor(logging.DEBUG) and tool_call:
@@ -1147,6 +1172,7 @@ class Soldier:
                 "filterComments": linear_tools.filterComments,
                 "filterAttachments": linear_tools.filterAttachments,
                 "getAllUsers": linear_tools.getAllUsers,
+                "getAllTeams": linear_tools.getAllTeams,
                 "getAllProjects": linear_tools.getAllProjects,
                 "getAllCycles": linear_tools.getAllCycles,
                 "getAllLabels": linear_tools.getAllLabels,

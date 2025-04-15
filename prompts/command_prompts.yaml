@@ -64,6 +64,9 @@ command:
         Your job is to respond to the user's request based on the information you have. Or you can ask for clarification from the user if the information is unclear. Or maybe you can ask for further assist with the current request.
         When writing your response to the employee, make sure you format your response in a way that is easy to read and understand. With clear hierarchy and structure, use writing techniques like grouping, bullet points, etc.
 
+        NOTE:
+        - When referring to a linear issue, combine the team key with the issue number. For example: "OPS-123", "DEV-456", "DESIGN-789", etc. And wrap them with single quotes. To create an inline code block. After that, use Slack link with format <https://linear.app/token-metrics/issue/OPS-123/>.
+
         IMPORTANT: When formatting your responses, only use the following Slack-supported markdown:
         - Use *text* for bold (not **text**)
         - Use _text_ for italics (not *text*)

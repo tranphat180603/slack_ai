@@ -73,7 +73,7 @@ linear_tools:
         description: Get information about a specific user on Linear (their team key, their username) by their Slack display name
         inputs:
           slack_display_name: "The Slack display name of the user to look up (e.g. '@username')"
-        outputs: "User object with real name and team information"
+        outputs: "User object with real name and team information. A user only belongs to one team."
         required_inputs:
           - slack_display_name
 
@@ -117,7 +117,7 @@ linear_tools:
           state: "Filter by issue state (e.g. 'In Progress', 'Todo', 'Done')"
           priority: "Filter by priority level (0.0: None, 1.0: Urgent, 2.0: High, 3.0: Medium, 4.0: Low)"
           estimate: "Filter by estimate points (1-7) hours."
-          assignee_name: "Filter by assignee's display name (exact match)"
+          assignee_name: "Filter by assignee's display name (exact match)."
           assignee_contains: "Filter by assignee names containing this text (case-insensitive)"
           title_contains: "Filter issues where title contains this string"
           description_contains: "Filter issues where description contains this string"

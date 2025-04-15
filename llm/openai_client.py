@@ -534,9 +534,7 @@ class OpenaiClient(ABC):
             
             return "Error: Could not extract response text"
         
-    def use_tool(self, prompt: str, reasoning_effort: str, tools: List[Dict[str, Any]] = None, stream: bool = False) -> Dict[str, Any]:
-        assert self.model.startswith("o"), "Only reasoning models are supported"
-        
+    def use_tool(self, prompt: str, system_prompt: str = None, reasoning_effort: str = None, tools: List[Dict[str, Any]] = None, stream: bool = False) -> Dict[str, Any]:        
         # Count input tokens for logging only (will be replaced with actual count from API)
         input_text = prompt + json.dumps(tools, ensure_ascii=False)
         estimated_input_tokens = self.token_tracker.count_tokens(input_text, self.model)
@@ -544,17 +542,35 @@ class OpenaiClient(ABC):
         # Reset last_tracked model to detect if we'll get usage info
         self.token_tracker.last_tracked_model = None
         self.token_tracker.last_tracked_function = None
+
+        if system_prompt:
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ]
+        else:
+            messages = [
+                {"role": "user", "content": prompt}
+            ]
         
         # Debug logging
         logger.debug(f"Using responses.create with model={self.model}, reasoning.effort={reasoning_effort}, and tools={len(tools or [])}")
         
-        response = self.client.responses.create(
-            model=self.model,
-            input=prompt,
-            stream=stream,
-            reasoning={"effort": reasoning_effort},
-            tools=tools,
-        )
+        if reasoning_effort:
+            response = self.client.responses.create(
+                model=self.model,
+                input=messages,
+                stream=stream,
+                reasoning={"effort": reasoning_effort},
+                tools=tools,
+            )
+        else:
+            response = self.client.responses.create(
+                model=self.model,
+                input=messages,
+                stream=stream,
+                tools=tools,
+            )
         
         # Find the function call output
         function_call = None
@@ -748,7 +764,7 @@ class CancellableOpenAIClient(OpenaiClient):
             
         return result
     
-    def use_tool(self, prompt: str, reasoning_effort: str, tools: List[Dict[str, Any]] = None, stream: bool = False) -> Dict[str, Any]:
+    def use_tool(self, prompt: str, system_prompt: str = None, reasoning_effort: str = None, tools: List[Dict[str, Any]] = None, stream: bool = False) -> Dict[str, Any]:
         """Enhanced tool use method with cancellation checks."""
         # Check for cancellation before API call
         if self.is_cancelled():
@@ -756,7 +772,7 @@ class CancellableOpenAIClient(OpenaiClient):
             raise CancellationError("Operation was cancelled")
             
         # Call parent implementation
-        result = super().use_tool(prompt, reasoning_effort, tools, stream)
+        result = super().use_tool(prompt, system_prompt, reasoning_effort, tools, stream)
         
         # Check again after API call
         if self.is_cancelled():
