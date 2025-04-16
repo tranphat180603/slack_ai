@@ -4,7 +4,7 @@ import logging
 import dotenv
 import yaml
 import time
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Union, Iterator
 import re
 
 from llm.openai_client import OpenaiClient, CancellableOpenAIClient, CancellationError
@@ -307,7 +307,13 @@ class Commander:
             
             # Log the response from the API
             if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"[Commander] API response for assign_tasks: {response}")
+                # For API responses, escape newlines to prevent log parsing issues
+                try:
+                    log_text = json.dumps(response, ensure_ascii=False)
+                    logger.debug(f"[Commander] API response for assign_tasks: {log_text}")
+                except:
+                    # Fallback to simpler logging if JSON serialization fails
+                    logger.debug(f"[Commander] API response received (not shown due to formatting)")
             
             # Parse JSON response with more robust error handling
             try:
@@ -336,7 +342,7 @@ class Commander:
                 return result
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse JSON from Commander response: {e}")
-                logger.error(f"Response was: {response[:200]}...")  # Log part of the response for debugging
+                logger.error(f"Response was: {response}")  # Log part of the response for debugging
                 
                 # Try to salvage the situation by extracting meaningful text
                 try:
@@ -493,12 +499,16 @@ class Commander:
         
         return message
 
-    def response(self, order: str, execution_results: Dict[str, Any]) -> str:
+    def response(self, order: str, execution_results: Dict[str, Any], stream: bool = False) -> Union[str, Iterator[str]]:
         """Generate a response based on execution results
         
         Parameters:
             order (str): The original user request
             execution_results (Dict[str, Any]): Results from function executions
+            stream (bool): Whether to stream the response
+            
+        Returns:
+            Union[str, Iterator[str]]: The response, either as a string or an iterator of strings
         """
         logger.debug(f"[Commander] response generation called with order: {order}")
 
@@ -538,14 +548,21 @@ class Commander:
         # Log the final prompt sent to the API
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"[Commander] Sending prompt to API for response using gpt-4.1-2025-04-14:\nSystem: {formatted['system']}\nUser: {formatted['user']}")
-        
         try:
             # Always use the response function with the new client
             response = response_client.response(
                 prompt=formatted["user"], 
-                system_prompt=formatted["system"]
+                system_prompt=formatted["system"],
+                stream=stream
             )
-            
+        except CancellationError:
+            logger.info("[Commander] response generation was cancelled")
+            return "I had to stop processing your request because you asked me to stop."
+        except Exception as e:
+            logger.error(f"Error generating final response: {e}")
+            return "I'm having trouble generating a response. Please try again later."
+
+        if not stream:
             # Calculate execution time
             execution_time = time.time() - start_time
             
@@ -565,12 +582,9 @@ class Commander:
                 formatted_response += "\n\n_Note: I've prepared a Linear action that requires your approval. Please review the form when it appears._"
             
             return formatted_response
-        except CancellationError:
-            logger.info("[Commander] response generation was cancelled")
-            return "I had to stop processing your request because you asked me to stop."
-        except Exception as e:
-            logger.error(f"Error generating final response: {e}")
-            return "I'm having trouble generating a response. Please try again later."
+        
+        elif stream:
+            return response #an iterator, not a string
         
     def analyze_image(self, image_data: str) -> Optional[str]:
         """
@@ -758,17 +772,18 @@ class Captain:
             # Track API call
             api_call_tracker.track_call("Captain", "plan", execution_time)
             
-            # Log the response from the API
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"[Captain] API response for plan: {json.dumps(json.loads(response), indent=2, ensure_ascii=False)}")
-            
             # Parse JSON response
             try:
+
                 if response.startswith("```json"):
                     response = response[len("```json"):].strip()
                 if response.endswith("```"):
                     response = response[:-len("```")]
                 result = json.loads(response)
+
+                #log the result
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"[Captain] Plan result: {json.dumps(result, indent=2, ensure_ascii=False)}")
                 
                 # Ensure the plan has the expected structure
                 if "function_levels" not in result:
@@ -1182,11 +1197,12 @@ class Soldier:
                 "createComment": linear_tools.createComment,
                 "getCurrentUser": linear_tools.getCurrentUser,
                 "semantic_search_linear": linear_tools.semantic_search_linear,
+                "getUserMessageByNumber": linear_tools.getUserMessageByNumber,
                 
                 # Slack tools
                 "search_channel_history": slack_tools.search_channel_history,
                 "get_users": slack_tools.get_users,
-                "get_current_user": slack_tools.get_current_user
+                "get_current_user": slack_tools.get_current_user,
             }
             
             # Get the tool implementation

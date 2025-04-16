@@ -408,6 +408,12 @@ class LinearParameterAdapter:
                 cycle_name = params.get('cycle_name')
                 cycle_number = params.get('cycle_number')
                 
+                # If cycle_name is numeric, try to use it as a cycle_number
+                if cycle_name and cycle_name.isdigit():
+                    cycle_number = int(cycle_name)
+                    cycle_name = None
+                    logging.getLogger("tools_declaration").info(f"Converting numeric cycle_name '{params['cycle_name']}' to cycle_number {cycle_number}")
+                
                 if team_key and linear_client is None:
                     from ops_linear_db.linear_client import LinearClient
                     import os
@@ -426,6 +432,9 @@ class LinearParameterAdapter:
                     
                     if cycle and 'id' in cycle:
                         data['cycleId'] = cycle['id']
+                        logging.getLogger("tools_declaration").info(f"Found cycle ID: {cycle['id']} for {'cycle_name' if cycle_name else 'cycle_number'}: {cycle_name if cycle_name else cycle_number}")
+                    else:
+                        logging.getLogger("tools_declaration").warning(f"No cycle found for {'cycle_name' if cycle_name else 'cycle_number'}: {cycle_name if cycle_name else cycle_number}")
             except Exception as e:
                 logging.getLogger("tools_declaration").error(f"Error looking up cycle ID: {str(e)}")
         
@@ -497,207 +506,76 @@ class LinearParameterAdapter:
     @staticmethod
     def adapt_update_issue(params: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Convert flat updateIssue parameters to proper format.
-        Automatically looks up IDs from names and numbers.
+        Adapt parameters for updateIssue
         """
-        import logging  # Import logging at the function level to fix the error
+        # Fallback name for compatibility
+        issue_number = params.get("issue_number") or params.get("issueNumber")
         
-        if 'data' in params and params['data'] is not None:
-            return params
+        # Base parameters
+        adapted = {
+            "issueNumber": issue_number,
+            "teamKey": params.get("team_key") or params.get("teamKey")
+        }
+        
+        # Set issue data to be updated
+        issue_data = {}
+        
+        # Add title if provided
+        if params.get("title") is not None:
+            issue_data["title"] = params["title"]
             
-        # Extract the issue update data from flat parameters
-        data = {}
-        linear_client = None
-        issue_id = params.get('issue_id') or params.get('issueId')
-        issue_number = params.get('issueNumber') or params.get('issue_number')
-        
-        # Map direct field copies
-        for field in ['title', 'description', 'priority', 'estimate',
-                     'stateId', 'assigneeId', 'labelIds', 'cycleId', 
-                     'projectId', 'parentId', 'archivedAt']:
-            if field in params and params[field] is not None:
-                data[field] = params[field]
-        
-        # Initialize LinearClient if needed for lookups
-        if linear_client is None and (issue_id or issue_number or 'assignee_name' in params
-                                    or 'state_name' in params or 'label_names' in params):
+        # Add description if provided
+        if params.get("description") is not None:
+            issue_data["description"] = params["description"]
+            
+        # Add priority if provided (as float)
+        if params.get("priority") is not None:
             try:
-                from ops_linear_db.linear_client import LinearClient
-                import os
-                linear_client = LinearClient(os.environ.get("LINEAR_API_KEY"))
-            except Exception as e:
-                logging.getLogger("tools_declaration").error(f"Error initializing LinearClient: {str(e)}")
-                linear_client = None
-        
-        # Look up the issue ID from the issue number if not provided
-        team_key = None
-        if not issue_id and issue_number and linear_client:
-            try:
-                # Find the issue by number
-                issue_criteria = {"number": {"eq": issue_number}}
-                issues = linear_client.filterIssues(issue_criteria)
+                issue_data["priority"] = float(params["priority"])
+            except (TypeError, ValueError):
+                pass
                 
-                if issues and len(issues) > 0:
-                    issue = issues[0]
-                    issue_id = issue.get('id')
-                    # Extract team key for later use
-                    if 'team' in issue and issue['team']:
-                        team_key = issue['team'].get('key')
-            except Exception as e:
-                logging.getLogger("tools_declaration").error(f"Error looking up issue ID: {str(e)}")
-        
-        # Fetch issue details if we have the ID but not the team key
-        if issue_id and not team_key and linear_client:
-            try:
-                # Find the issue by ID
-                issue_criteria = {"id": {"eq": issue_id}}
-                issues = linear_client.filterIssues(issue_criteria)
+        # Add estimate if provided
+        if params.get("estimate") is not None:
+            issue_data["estimate"] = params["estimate"]
                 
-                if issues and len(issues) > 0:
-                    issue = issues[0]
-                    # Extract team key for later use
-                    if 'team' in issue and issue['team']:
-                        team_key = issue['team'].get('key')
-            except Exception as e:
-                logging.getLogger("tools_declaration").error(f"Error fetching issue details: {str(e)}")
-        
-        # Handle assignee_name to assigneeId conversion
-        if 'assignee_name' in params and params['assignee_name'] and 'assigneeId' not in data:
-            try:
-                # Initialize LinearClient if needed
-                if linear_client is None:
-                    from ops_linear_db.linear_client import LinearClient
-                    import os
-                    linear_client = LinearClient(os.environ.get("LINEAR_API_KEY"))
+        # Add state_name if provided (must look up state ID)
+        if params.get("state_name") is not None:
+            issue_data["stateId"] = "$getStateIdByName"
                 
-                # First try: Use the new getUserByName function with team context
-                # For update operations, we've likely already looked up the team key
-                lookup_team_key = team_key or params.get('teamKey')
-                if lookup_team_key:
-                    # Look up user in the specific team first
-                    user = linear_client.getUserByName(params['assignee_name'], lookup_team_key)
-                    if user and user.get('id'):
-                        data['assigneeId'] = user.get('id')
-                        logging.getLogger("tools_declaration").info(
-                            f"Found assignee '{params['assignee_name']}' in team '{lookup_team_key}' with ID: {user.get('id')}"
-                        )
+        # Add assignee if provided (must look up user ID)
+        if params.get("assignee_name") is not None:
+            issue_data["assigneeId"] = "$getUserIdByName"
                 
-                # Second try: Use the new function without team context if not found
-                if 'assigneeId' not in data:
-                    user = linear_client.getUserByName(params['assignee_name'])
-                    if user and user.get('id'):
-                        data['assigneeId'] = user.get('id')
-                        logging.getLogger("tools_declaration").info(
-                            f"Found assignee '{params['assignee_name']}' with ID: {user.get('id')}"
-                        )
-                    else:
-                        logging.getLogger("tools_declaration").warning(
-                            f"Could not find assignee with name '{params['assignee_name']}'"
-                        )
+        # Add label names if provided (must look up label IDs)
+        if params.get("label_names") is not None:
+            # Handle empty list case explicitly
+            if isinstance(params.get("label_names"), list) and len(params.get("label_names")) == 0:
+                issue_data["labelIds"] = []
+            else:
+                issue_data["labelIds"] = "$getLabelIdsByNames"
                 
-            except Exception as e:
-                logging.getLogger("tools_declaration").error(f"Error looking up assignee ID: {str(e)}")
-                logging.getLogger("tools_declaration").error(traceback.format_exc())
-        
-        # Handle state_name to stateId conversion
-        if 'state_name' in params and params['state_name'] and 'stateId' not in data:
-            try:
-                # Use team key from issue if available, otherwise use provided team key
-                lookup_team_key = team_key or params.get('teamKey')
+        # Add project if provided (must look up project ID)
+        if params.get("project_name") is not None:
+            issue_data["projectId"] = "$getProjectIdByName"
                 
-                if lookup_team_key and linear_client:
-                    states = linear_client.getAllStates(lookup_team_key)
-                    state = next((s for s in states 
-                                if s.get('name', '').lower() == params['state_name'].lower()), None)
-                    
-                    if state and 'id' in state:
-                        data['stateId'] = state['id']
-            except Exception as e:
-                logging.getLogger("tools_declaration").error(f"Error looking up state ID: {str(e)}")
-        
-        # Handle cycle_name/cycle_number to cycleId conversion
-        if ('cycle_name' in params and params['cycle_name'] and 'cycleId' not in data) or \
-           ('cycle_number' in params and params['cycle_number'] and 'cycleId' not in data):
-            try:
-                # Use team key from issue if available, otherwise use provided team key
-                lookup_team_key = team_key or params.get('teamKey')
-                cycle_name = params.get('cycle_name')
-                cycle_number = params.get('cycle_number')
+        # Add cycle if provided (must look up cycle ID by number)
+        # Note: cycle_name is no longer supported, only cycle_number
+        if params.get("cycle_number") is not None:
+            issue_data["cycleId"] = "$getCycleIdByNumber"
                 
-                if lookup_team_key and linear_client:
-                    cycles = linear_client.getAllCycles(lookup_team_key)
-                    cycle = None
-                    
-                    if cycle_name:
-                        cycle = next((c for c in cycles 
-                                    if c.get('name', '').lower() == cycle_name.lower()), None)
-                    elif cycle_number:
-                        cycle = next((c for c in cycles 
-                                    if c.get('number') == cycle_number), None)
-                    
-                    if cycle and 'id' in cycle:
-                        data['cycleId'] = cycle['id']
-            except Exception as e:
-                logging.getLogger("tools_declaration").error(f"Error looking up cycle ID: {str(e)}")
-        
-        # Handle project_name to projectId conversion
-        if 'project_name' in params and params['project_name'] and 'projectId' not in data:
-            try:
-                # Use team key from issue if available, otherwise use provided team key
-                lookup_team_key = team_key or params.get('teamKey')
+        # Add parent issue if provided (must look up issue ID)
+        if params.get("parent_issue_number") is not None:
+            issue_data["parentId"] = "$getIssueIdByNumber"
                 
-                if lookup_team_key and linear_client:
-                    projects = linear_client.getAllProjects(lookup_team_key)
-                    project = next((p for p in projects 
-                                  if p.get('name', '').lower() == params['project_name'].lower()), None)
-                    
-                    if project and 'id' in project:
-                        data['projectId'] = project['id']
-            except Exception as e:
-                logging.getLogger("tools_declaration").error(f"Error looking up project ID: {str(e)}")
-        
-        # Handle label_names to labelIds conversion
-        if 'label_names' in params and params['label_names'] and 'labelIds' not in data:
-            try:
-                # Use team key from issue if available, otherwise use provided team key
-                lookup_team_key = team_key or params.get('teamKey')
+        # Add archived status if provided
+        if params.get("archived") is not None:
+            issue_data["archived"] = params["archived"]
                 
-                if lookup_team_key and linear_client:
-                    labels = linear_client.getAllLabels(lookup_team_key)
-                    label_ids = []
-                    
-                    for label_name in params['label_names']:
-                        label = next((l for l in labels 
-                                     if l.get('name', '').lower() == label_name.lower()), None)
-                        if label and 'id' in label:
-                            label_ids.append(label['id'])
-                    
-                    if label_ids:
-                        data['labelIds'] = label_ids
-            except Exception as e:
-                logging.getLogger("tools_declaration").error(f"Error looking up label IDs: {str(e)}")
-        
-        # Handle parent_issue_number to parentId conversion
-        if 'parent_issue_number' in params and params['parent_issue_number'] and 'parentId' not in data:
-            try:
-                if linear_client:
-                    # Try to find the parent issue
-                    issue_criteria = {"number": {"eq": params['parent_issue_number']}}
-                    
-                    # If we have a team key, use it to narrow down the search
-                    if team_key:
-                        issue_criteria["team"] = {"key": {"eq": team_key}}
-                    elif 'teamKey' in params and params['teamKey']:
-                        issue_criteria["team"] = {"key": {"eq": params['teamKey']}}
-                        
-                    issues = linear_client.filterIssues(issue_criteria)
-                    
-                    if issues and len(issues) > 0:
-                        data['parentId'] = issues[0].get('id')
-            except Exception as e:
-                logging.getLogger("tools_declaration").error(f"Error looking up parent issue ID: {str(e)}")
-                
-        return {'issueId': issue_id, 'data': data}
+        # Set the issue data
+        adapted["data"] = issue_data
+            
+        return adapted
     
     @staticmethod
     def adapt_create_comment(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -706,7 +584,7 @@ class LinearParameterAdapter:
         Automatically looks up issue ID from issue number and team key.
         """
         import logging  # Import logging at the function level to fix the error
-        logger = logging.getLogger("tools_declaration")
+        logger = logging.getLogger("linear_tools")
         
         # If issue_id is already provided, use it directly
         if 'issue_id' in params or 'issueId' in params:
@@ -822,6 +700,20 @@ def adapt_parameters(adapter_method: Callable):
             # Adapt parameters
             try:
                 adapted_params = adapter_method(params)
+                
+                # Log the adapted parameters before calling the function
+                if adapter_method.__name__ == 'adapt_update_issue':
+                    logger.info(f"After adapter: adapted_params = {adapted_params}")
+                
+                # IMPORTANT CHANGE: Add all original parameters to adapted_params
+                # This ensures critical values from original call are available
+                if adapter_method.__name__ == 'adapt_update_issue':
+                    # Keep all original parameters except those that would conflict with adapted ones
+                    for key, value in params.items():
+                        if key not in adapted_params and key != 'data':
+                            adapted_params[key] = value
+                    logger.info(f"Enhanced params (with originals): {adapted_params}")
+                
                 # Call the function with adapted parameters
                 result = func(self, **adapted_params)
                 
@@ -1066,10 +958,264 @@ class LinearTools:
         if issueId:
             issue_id = issueId
             
+        # Get team key from kwargs or use the one in data
+        team_key = kwargs.get('teamKey') or kwargs.get('team_key')
+        
+        # IMPORTANT: Get critical values from kwargs for resolution
+        # These come from the original parameters before adaptation
+        state_name = kwargs.get('state_name')
+        cycle_number = kwargs.get('cycle_number')
+        assignee_name = kwargs.get('assignee_name')
+        parent_issue_number = kwargs.get('parent_issue_number')
+        project_name = kwargs.get('project_name')
+        
+        # Log what we found in kwargs
+        logger.info(f"Critical values from kwargs: state_name={state_name}, cycle_number={cycle_number}, " + 
+                   f"assignee_name={assignee_name}, parent_issue_number={parent_issue_number}, project_name={project_name}")
+        
+        # Resolve placeholders in data to actual UUIDs
+        if data:
+            # Log the initial data before any resolution
+            logger.info(f"Initial data before resolution: {data}")
+            
+            # Check which placeholders we have
+            if 'assigneeId' in data and data['assigneeId'] == '$getUserIdByName':
+                logger.info(f"Found assigneeId placeholder")
+                
+            if 'stateId' in data and data['stateId'] == '$getStateIdByName':
+                logger.info(f"Found stateId placeholder")
+                
+            if 'labelIds' in data and isinstance(data['labelIds'], list) and data['labelIds'] and data['labelIds'][0] == '$getLabelIdsByNames':
+                logger.info(f"Found labelIds placeholder")
+                
+            if 'cycleId' in data and data['cycleId'] == '$getCycleIdByNumber':
+                logger.info(f"Found cycleId placeholder")
+            
+            # Create a copy of the data to avoid modifying the original
+            resolved_data = data.copy()
+            
+            # Resolve assignee_name to assigneeId
+            if 'assigneeId' in resolved_data and resolved_data['assigneeId'] == '$getUserIdByName':
+                if assignee_name:
+                    try:
+                        # Get user info
+                        user = self.client.getUserByName(assignee_name, team_key)
+                        if user and user.get('id'):
+                            resolved_data['assigneeId'] = user.get('id')
+                            logger.info(f"Resolved assignee '{assignee_name}' to ID: {user.get('id')}")
+                        else:
+                            # If we can't resolve the assignee, remove it to avoid an error
+                            logger.warning(f"Could not resolve assignee '{assignee_name}', removing from update")
+                            resolved_data.pop('assigneeId')
+                    except Exception as e:
+                        logger.warning(f"Error resolving assignee ID: {str(e)}")
+                        resolved_data.pop('assigneeId')
+                else:
+                    resolved_data.pop('assigneeId')
+            
+            # Resolve state_name to stateId
+            if 'stateId' in resolved_data and resolved_data['stateId'] == '$getStateIdByName':
+                if state_name and team_key:
+                    try:
+                        # Get all states for the team
+                        states = self.client.getAllStates(team_key)
+                        state = next((s for s in states if s.get('name', '').lower() == state_name.lower()), None)
+                        if state and state.get('id'):
+                            resolved_data['stateId'] = state.get('id')
+                            logger.info(f"Resolved state '{state_name}' to ID: {state.get('id')}")
+                        else:
+                            # If we can't resolve the state, log clearly and remove it
+                            logger.warning(f"Could not find state with name '{state_name}' for team {team_key}, removing stateId from update")
+                            resolved_data.pop('stateId')
+                    except Exception as e:
+                        # Log the error and keep the field out of the update
+                        logger.warning(f"Error resolving state ID: {str(e)}")
+                        logger.warning(f"Removing stateId from update")
+                        resolved_data.pop('stateId')
+                else:
+                    # Log why we're removing it
+                    if not state_name:
+                        logger.warning("No state_name provided, removing stateId from update")
+                    if not team_key:
+                        logger.warning("No team_key provided, removing stateId from update")
+                    resolved_data.pop('stateId')
+            
+            # Resolve label_names to labelIds
+            if 'labelIds' in resolved_data and isinstance(resolved_data['labelIds'], list) and resolved_data['labelIds'] and resolved_data['labelIds'][0] == '$getLabelIdsByNames':
+                label_names = kwargs.get('label_names')
+                # Even if label_names is empty, we need to handle it properly
+                if label_names is not None and team_key:
+                    # If it's an empty list, just set labelIds to empty list
+                    if not label_names:
+                        resolved_data['labelIds'] = []
+                        logger.info("Setting labelIds to empty list for empty label_names")
+                    else:
+                        try:
+                            # Get all labels for the team
+                            labels = self.client.getAllLabels(team_key)
+                            label_ids = []
+                            for label_name in label_names:
+                                label = next((l for l in labels if l.get('name', '').lower() == label_name.lower()), None)
+                                if label and label.get('id'):
+                                    label_ids.append(label.get('id'))
+                            
+                            if label_ids:
+                                resolved_data['labelIds'] = label_ids
+                                logger.info(f"Resolved labels to IDs: {label_ids}")
+                            else:
+                                # If we can't resolve any labels, set to empty list
+                                logger.warning(f"Could not resolve any labels, setting empty list")
+                                resolved_data['labelIds'] = []
+                        except Exception as e:
+                            logger.warning(f"Error resolving label IDs: {str(e)}")
+                            resolved_data['labelIds'] = []
+                else:
+                    resolved_data.pop('labelIds')
+            
+            # Resolve cycle_number to cycleId
+            if 'cycleId' in resolved_data and resolved_data['cycleId'] == '$getCycleIdByNumber':
+                cycle_number = kwargs.get('cycle_number')
+                if cycle_number and team_key:
+                    try:
+                        # Get all cycles for the team
+                        cycles = self.client.getAllCycles(team_key)
+                        cycle = next((c for c in cycles if c.get('number') == cycle_number), None)
+                        if cycle and cycle.get('id'):
+                            resolved_data['cycleId'] = cycle.get('id')
+                            logger.info(f"Resolved cycle #{cycle_number} to ID: {cycle.get('id')}")
+                        else:
+                            # If we can't resolve the cycle, log clearly and remove it
+                            logger.warning(f"Could not find cycle #{cycle_number} for team {team_key}, removing cycleId from update")
+                            resolved_data.pop('cycleId')
+                    except Exception as e:
+                        # Log the error and keep the field out of the update
+                        logger.warning(f"Error resolving cycle ID: {str(e)}")
+                        logger.warning(f"Removing cycleId from update")
+                        resolved_data.pop('cycleId')
+                else:
+                    # Log why we're removing it
+                    if not cycle_number:
+                        logger.warning("No cycle_number provided, removing cycleId from update")
+                    if not team_key:
+                        logger.warning("No team_key provided, removing cycleId from update") 
+                    resolved_data.pop('cycleId')
+            
+            # Resolve parent_issue_number to parentId
+            if 'parentId' in resolved_data and resolved_data['parentId'] == '$getIssueIdByNumber':
+                parent_issue_number = kwargs.get('parent_issue_number')
+                if parent_issue_number and team_key:
+                    try:
+                        # Find the parent issue by number
+                        criteria = {"number": {"eq": parent_issue_number}}
+                        if team_key:
+                            criteria["team"] = {"key": {"eq": team_key}}
+                            
+                        # Look up parent issue
+                        issues = self.client.filterIssues(criteria, limit=1)
+                        
+                        if issues and len(issues) > 0 and issues[0].get('id'):
+                            parent_id = issues[0].get('id')
+                            resolved_data['parentId'] = parent_id
+                            logger.info(f"Resolved parent issue #{parent_issue_number} to ID: {parent_id}")
+                        else:
+                            # If we can't find the parent issue, log and remove it
+                            logger.warning(f"Could not find parent issue #{parent_issue_number}, removing parentId from update")
+                            resolved_data.pop('parentId')
+                    except Exception as e:
+                        # Log the error and keep the field out of the update
+                        logger.warning(f"Error resolving parent issue ID: {str(e)}")
+                        logger.warning(f"Removing parentId from update")
+                        resolved_data.pop('parentId')
+                else:
+                    # Log why we're removing it
+                    if not parent_issue_number:
+                        logger.warning("No parent_issue_number provided, removing parentId from update")
+                    if not team_key:
+                        logger.warning("No team_key provided, removing parentId from update")
+                    resolved_data.pop('parentId')
+                    
+            # Resolve project_name to projectId
+            if 'projectId' in resolved_data and resolved_data['projectId'] == '$getProjectIdByName':
+                project_name = kwargs.get('project_name')
+                if project_name and team_key:
+                    try:
+                        # Get all projects for the team
+                        projects = self.client.getAllProjects(team_key)
+                        project = next((p for p in projects if p.get('name', '').lower() == project_name.lower()), None)
+                        
+                        if project and project.get('id'):
+                            resolved_data['projectId'] = project.get('id')
+                            logger.info(f"Resolved project '{project_name}' to ID: {project.get('id')}")
+                        else:
+                            # If we can't find the project, log and remove it
+                            logger.warning(f"Could not find project '{project_name}' for team {team_key}, removing projectId from update")
+                            resolved_data.pop('projectId')
+                    except Exception as e:
+                        # Log the error and keep the field out of the update
+                        logger.warning(f"Error resolving project ID: {str(e)}")
+                        logger.warning(f"Removing projectId from update")
+                        resolved_data.pop('projectId')
+                else:
+                    # Log why we're removing it
+                    if not project_name:
+                        logger.warning("No project_name provided, removing projectId from update")
+                    if not team_key:
+                        logger.warning("No team_key provided, removing projectId from update")
+                    resolved_data.pop('projectId')
+            
+            # Use the resolved data instead of the original data
+            data = resolved_data
+            
+            # Log final state after all resolutions
+            logger.info(f"Field resolution summary:")
+            for field in ['title', 'description', 'priority', 'assigneeId', 'stateId', 'labelIds', 'cycleId', 'parentId', 'projectId']:
+                if field in data:
+                    logger.info(f"  - {field} is present in final data")
+                else:
+                    logger.info(f"  - {field} was removed during resolution")
+            
         if issue_id:
+            # If we already have the issue ID, use it directly
             return self.client.updateIssueById(issue_id, data)
         elif issueNumber:
-            return self.client.updateIssue(issueNumber, data)
+            # Linear API has changed and no longer allows updating by number
+            # We need to first get the issue ID using the number
+            try:
+                # Construct filter criteria to find the issue by number
+                criteria = {"number": {"eq": issueNumber}}
+                if team_key:
+                    criteria["team"] = {"key": {"eq": team_key}}
+                
+                # Find the issue
+                issues = self.client.filterIssues(criteria, limit=1)
+                if not issues or len(issues) == 0:
+                    raise ValueError(f"Issue #{issueNumber} not found")
+                
+                # Get the issue ID and use it to update
+                issue_id = issues[0].get('id')
+                if not issue_id:
+                    raise ValueError(f"Issue #{issueNumber} found but has no ID")
+                
+                logger.info(f"Found issue ID: {issue_id} for issue #{issueNumber}")
+                
+                # Add detailed logging to see exactly what we're sending to the API
+                logger.info(f"Sending update to Linear API with issue_id: {issue_id}")
+                if data is None:
+                    logger.error(f"DATA IS NULL before API call. This will cause an error. resolved_data: {resolved_data}")
+                else:
+                    logger.info(f"Final data payload: {data}")
+                
+                # Make the API call
+                result = self.client.updateIssueById(issue_id, data)
+                
+                # Log the result
+                if result:
+                    logger.info(f"Linear API update response: {result}")
+                
+                return result
+            except Exception as e:
+                logger.error(f"Error updating issue by number: {str(e)}")
+                raise
         else:
             raise ValueError("Either issue_id or issueNumber must be provided")
     

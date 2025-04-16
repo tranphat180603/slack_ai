@@ -205,8 +205,6 @@ class OpenaiClient(ABC):
         # Log image data availability for debugging
         if image_data:
             logger.info(f"Image data is provided, length: {len(image_data)} bytes")
-        else:
-            logger.warning("No image_data provided to response method or it's empty")
         
         # Handle image input if provided
         if image_data and (
@@ -278,40 +276,8 @@ class OpenaiClient(ABC):
             stream=stream,
             temperature=0.7
         )
-        if stream:
-            full_response = ""
-            for chunk in response:
-                # Check for ResponseTextDeltaEvent with delta field
-                if hasattr(chunk, 'type') and chunk.type == 'response.output_text.delta':
-                    if hasattr(chunk, 'delta'):
-                        delta = chunk.delta
-                        full_response += delta
-                        print(delta, end="", flush=True)
-                # Check for done event with usage information
-                elif hasattr(chunk, 'type') and chunk.type == 'response.done':
-                    if hasattr(chunk, 'response') and hasattr(chunk.response, 'usage'):
-                        # Extract usage information
-                        usage = chunk.response.usage
-                        input_tokens = usage.input_tokens
-                        output_tokens = usage.output_tokens
-                        cached_tokens = 0
-                        
-                        # Extract cached tokens if available
-                        if hasattr(usage, 'input_tokens_details') and hasattr(usage.input_tokens_details, 'cached_tokens'):
-                            cached_tokens = usage.input_tokens_details.cached_tokens
-                            logger.debug(f"Found {cached_tokens} cached tokens in response")
-                        
-                        # Track token usage with actual counts from API
-                        self.token_tracker.add_call("response", self.model, input_tokens, output_tokens, 0, cached_tokens)
-            print()  # Add a newline at the end
-            
-            # If we didn't get usage from API, use estimates as fallback
-            if self.token_tracker.last_tracked_function != "response" or self.token_tracker.last_tracked_model != self.model:
-                output_tokens = self.token_tracker.count_tokens(full_response, self.model)
-                # Track token usage with estimated counts
-                self.token_tracker.add_call("response", self.model, estimated_input_tokens, output_tokens, 0, 0)
-            
-            return full_response
+        if stream:  
+            return response #an iterator, not a string
         else:
             try:
                 # For GPT models, extract text content
@@ -400,7 +366,6 @@ class OpenaiClient(ABC):
                     if hasattr(chunk, 'delta'):
                         delta = chunk.delta
                         full_response += delta
-                        print(delta, end="", flush=True)
                 # Check for done event with usage information
                 elif hasattr(chunk, 'type') and chunk.type == 'response.done':
                     if hasattr(chunk, 'response') and hasattr(chunk.response, 'usage'):
@@ -422,7 +387,6 @@ class OpenaiClient(ABC):
                         
                         # Track token usage with actual counts from API
                         self.token_tracker.add_call("response_reasoning", self.model, input_tokens, output_tokens, reasoning_tokens, cached_tokens)
-            print()  # Add a newline at the end
             
             # If we didn't get usage from API, use estimates as fallback
             if self.token_tracker.last_tracked_function != "response_reasoning" or self.token_tracker.last_tracked_model != self.model:

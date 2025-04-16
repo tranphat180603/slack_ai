@@ -955,8 +955,8 @@ class TMAISlackAgent:
                 # Mark Direct response as completed
                 message_handler.update_stage("I want to say...", completed=True)
                 
-                # Send final message and delete thinking message
-                await self._send_response(final_response, ai_request, effective_thread_ts)
+                # Send final message (at first step) and delete thinking message
+                await self._send_response(final_response, ai_request, effective_thread_ts, stream=False)
                 # Delete all progress messages instead of just the thinking message
                 await message_handler.delete_all_progress_messages()
 
@@ -1120,16 +1120,16 @@ class TMAISlackAgent:
                     message_handler.update_stage("No functions to execute", completed=True)
                     
                     # Generate response from Commander
-                    final_response = self.commander.response(order, execution_results)
+                    final_response = self.commander.response(order, execution_results, stream=True)
                     
                     # Send final message and delete thinking message
-                    await self._send_response(final_response, ai_request, effective_thread_ts)
+                    final_response_text = await self._send_response(final_response, ai_request, effective_thread_ts, stream=True)
                     # Delete all progress messages instead of just the thinking message
                     await message_handler.delete_all_progress_messages()
                     
                     # Add to conversation history
                     await conversation_manager.add_message("user", ai_request.text, ai_request.message_ts)
-                    await conversation_manager.add_message("assistant", final_response)
+                    await conversation_manager.add_message("assistant", final_response_text)
                     
                     # Log token and API call usage if in debug mode
                     if logger.isEnabledFor(logging.DEBUG):
@@ -1258,22 +1258,21 @@ class TMAISlackAgent:
                 
                 # If we have any results so far, generate a partial response
                 if execution_results:
-                    partial_response = self.commander.response(
+                    final_response = self.commander.response(
                         order=order,
-                        execution_results=execution_results
+                        execution_results=execution_results,
+                        stream=True
                     )
                     
-                    # Add note about interruption
-                    final_response = f"*Note: Processing was interrupted at your request. Here's what I found so far:*\n\n{partial_response}"
                     
                     # Send partial response and delete thinking message
-                    await self._send_response(final_response, ai_request, effective_thread_ts)
+                    final_response_text = await self._send_response(final_response, ai_request, effective_thread_ts, stream=True)
                     # Delete all progress messages instead of just the thinking message
                     await message_handler.delete_all_progress_messages()
                     
                     # Add to conversation history
                     await conversation_manager.add_message("user", ai_request.text, ai_request.message_ts)
-                    await conversation_manager.add_message("assistant", final_response)
+                    await conversation_manager.add_message("assistant", final_response_text)
                 else:
                     await message_handler.delete_all_progress_messages()
                 
@@ -1294,7 +1293,8 @@ class TMAISlackAgent:
             # Make the Commander API call for the final response
             final_response = self.commander.response(
                 order=order,
-                execution_results=execution_results
+                execution_results=execution_results,
+                stream=True
             )
             
             # Mark Commander response as completed AFTER API call
@@ -1311,14 +1311,11 @@ class TMAISlackAgent:
                     channel_id = ai_request.channel_id
                     thread_ts = effective_thread_ts
                     
-                    # Initialize SlackModals for modal forms
-                    from ops_slack.slack_modals import SlackModals
-                    slack_modals = SlackModals(self.slack_client)
                     
                     # First send a message to get a trigger_id
                     try:
                         # Send the final response first
-                        await self._send_response(final_response, ai_request, effective_thread_ts)
+                        final_response_text = await self._send_response(final_response, ai_request, effective_thread_ts, stream=True)
                         
                         # Then send the approval request
                         response = await asyncio.to_thread(
@@ -1348,7 +1345,7 @@ class TMAISlackAgent:
                                             "value": json.dumps({
                                                 "action": "open_linear_modal",
                                                 "function": func_name,
-                                                "parameters": result.get('parameters', {}),
+                                                "params_id": f"params_{func_name}_{context['context_id'][-8:]}",
                                                 "context_id": context['context_id']
                                             }),
                                             "action_id": "open_linear_modal"
@@ -1358,6 +1355,10 @@ class TMAISlackAgent:
                             ]
                         )
                         
+                        # Store the parameters in context for later retrieval
+                        params_id = f"params_{func_name}_{context['context_id'][-8:]}"
+                        context_manager.add_context(context['context_id'], params_id, result.get('parameters', {}))
+
                         # Store pending approval details in context
                         context_manager.add_context(
                             context['context_id'], 
@@ -1370,7 +1371,7 @@ class TMAISlackAgent:
                         
                         # Add to conversation history
                         await conversation_manager.add_message("user", ai_request.text, ai_request.message_ts)
-                        await conversation_manager.add_message("assistant", final_response)
+                        await conversation_manager.add_message("assistant", final_response_text)
                         
                         return
                         
@@ -1380,13 +1381,13 @@ class TMAISlackAgent:
             
             # 6. Send final message and delete thinking message (if no approval needed)
             if not linear_approval_needed:
-                await self._send_response(final_response, ai_request, effective_thread_ts)
+                final_response_text = await self._send_response(final_response, ai_request, effective_thread_ts, stream=True)
                 # Delete all progress messages instead of just the thinking message
                 await message_handler.delete_all_progress_messages()
                 
                 # 7. Add to conversation history
                 await conversation_manager.add_message("user", ai_request.text, ai_request.message_ts)
-                await conversation_manager.add_message("assistant", final_response)
+                await conversation_manager.add_message("assistant", final_response_text)
             
             # Log execution time
             elapsed_time = time.time() - start_time
@@ -1417,17 +1418,87 @@ class TMAISlackAgent:
                 except Exception as log_error:
                     logger.error(f"Error generating usage reports: {str(log_error)}")
     
-    async def _send_response(self, response: str, ai_request: AIRequest, thread_ts: str):
+    async def _send_response(self, response: str, ai_request: AIRequest, thread_ts: str, stream: bool = False):
         """Send the response to Slack."""
-        try:
-            await asyncio.to_thread(
+        full_response = ""
+        if not stream:
+            try:
+                await asyncio.to_thread(
+                    self.slack_client.chat_postMessage,
+                    channel=ai_request.channel_id,
+                    thread_ts=thread_ts,
+                    text=response
+                )
+                return response
+            except SlackApiError as e:
+                logger.error(f"Error sending response: {e.response.get('error', '')}")
+                return response
+        elif stream:
+            # For streaming responses, create an initial message
+            init_response = await asyncio.to_thread(
                 self.slack_client.chat_postMessage,
                 channel=ai_request.channel_id,
                 thread_ts=thread_ts,
-                text=response
+                text="Generating response..."
             )
-        except SlackApiError as e:
-            logger.error(f"Error sending response: {e.response.get('error', '')}")
+            message_ts = init_response["ts"]
+            buffer = ""
+            
+            try:
+                # Process each chunk from the stream
+                for chunk in response:            
+                    if hasattr(chunk, 'type') and chunk.type == 'response.output_text.delta':
+                        if hasattr(chunk, 'delta'):
+                            delta = chunk.delta
+                            full_response += delta
+                            buffer += delta
+                    
+                    # because can't update a message that's too long. Will create a new message. Reset full_response every 1000 characters.
+                    if len(full_response) >= 1000:
+                        # create a chunk for the first 1000
+                        chunk = full_response[:1000]
+                        full_response = full_response[1000:]
+                        
+                        # post a new message with chunk
+                        next_message = await asyncio.to_thread(
+                            self.slack_client.chat_postMessage,
+                            channel=ai_request.channel_id,
+                            thread_ts=thread_ts,
+                            text=chunk
+                        )
+                        
+                        # Use the new message TS for any upcoming updates
+                        message_ts = next_message["ts"]
+
+
+                    # Update the message when buffer is large enough. Reset buffer every 300 characters.
+                    if len(buffer) >= 300:
+                        await asyncio.to_thread(
+                            self.slack_client.chat_update,
+                            channel=ai_request.channel_id,
+                            ts=message_ts,
+                            text=full_response
+                        )
+                        buffer = ""
+                        await asyncio.sleep(0.1)
+                    
+                
+                # Send the final update with the complete response
+                if full_response and len(full_response) < 1000:
+                    await asyncio.to_thread(
+                        self.slack_client.chat_update,
+                        channel=ai_request.channel_id,
+                        ts=message_ts,
+                        text=full_response
+                    )
+                
+                # Return the complete response string for conversation history
+                return full_response
+                
+            except Exception as e:
+                logger.error(f"Error during streaming response: {str(e)}")
+                # If streaming fails, return what we've got so far
+                return full_response or "Sorry, I had an issue generating the response."
 
     async def handle_interaction_payload(self, payload: Dict[str, Any]) -> bool:
         """
@@ -1545,6 +1616,9 @@ class TMAISlackAgent:
                 thread_ts = payload.get("container", {}).get("thread_ts") or payload.get("message", {}).get("thread_ts")
                 value = json.loads(action.get("value", "{}"))
                 
+                # Log the value for debugging
+                logger.info(f"TRIGGER DEBUG: Button value: {json.dumps(value)}")
+                
                 # Get the context ID from the value
                 context_id = value.get("context_id")
                 if not context_id:
@@ -1553,17 +1627,26 @@ class TMAISlackAgent:
                 
                 function_name = value.get("function")
                 
-                # Get the pending approval from the context
+                # Get the context FIRST
                 context = context_manager.get_context(context_id)
+                
+                # Check if parameters are referenced by ID or included directly
+                params_id = value.get("params_id")
+                if params_id and context:
+                    # Retrieve parameters from context
+                    retrieved_params = context.get(params_id, {})
+                    if retrieved_params:
+                        parameters = retrieved_params
+                    # If no parameters were found by ID, we'll fall back to the ones directly included
+                else:
+                    # Fallback to direct parameters (for backward compatibility)
+                    parameters = value.get("parameters", {})
+                
+                # If no context found, just log a warning but continue
                 if not context:
-                    logger.error(f"No context found for ID {context_id}")
-                    return False
-                
-                pending_approval = context.get(f"pending_approval_{function_name}")
-                if not pending_approval:
-                    logger.error(f"No pending approval found for function {function_name}")
-                    return False
-                
+                    logger.warning(f"No context found for ID {context_id}, but will proceed with action anyway")
+                    context = {}
+                    
                 # Update the approval message
                 await asyncio.to_thread(
                     self.slack_client.chat_update,
@@ -1583,13 +1666,20 @@ class TMAISlackAgent:
                 
                 # If approved, execute the function with the parameters
                 if action_id == "approve_linear_action":
-                    # Get the parameters from the value
-                    parameters = value.get("parameters", {})
+                    # Check if parameters are referenced by ID or included directly
+                    params_id = value.get("params_id")
+                    if params_id:
+                        # Retrieve parameters from context
+                        parameters = context_manager.get_context(context_id).get(params_id, {})
+                    else:
+                        # Fallback to direct parameters (for backward compatibility)
+                        parameters = value.get("parameters", {})
+                        
+                    # Add approved flag to parameters
                     parameters["approved"] = True
                     
                     # Execute the function
                     try:
-                        # This assumes Soldier.execute is implemented to handle this case
                         result = await self.soldier.execute(
                             plan={},  # Empty plan as we're executing directly
                             function_name=function_name,
@@ -1638,12 +1728,25 @@ class TMAISlackAgent:
                 message_ts = payload.get("message", {}).get("ts")
                 user_id = payload.get("user", {}).get("id")
                 thread_ts = payload.get("container", {}).get("thread_ts") or payload.get("message", {}).get("thread_ts")
-                trigger_id = payload.get("trigger_id")
-                value = json.loads(action.get("value", "{}"))
                 
+                # CRITICAL: Immediately extract the trigger_id first thing since it expires quickly
+                trigger_id = payload.get("trigger_id")
                 if not trigger_id:
                     logger.error("No trigger_id in payload, can't open modal")
                     return False
+                
+                # Log the trigger_id right away
+                logger.info(f"TRIGGER DEBUG: Received trigger_id: {trigger_id}")
+                
+                # Extract the remaining information
+                value = json.loads(action.get("value", "{}"))
+                
+                # Log the value for debugging
+                logger.info(f"TRIGGER DEBUG: Button value: {json.dumps(value)}")
+                
+                # Add detailed trigger_id logging
+                logger.info(f"TRIGGER DEBUG: Payload timestamp: {payload.get('trigger_id')}")
+                logger.info(f"TRIGGER DEBUG: Action timestamp: {payload.get('action_ts')}")
                 
                 # Get the context ID from the value
                 context_id = value.get("context_id")
@@ -1652,43 +1755,63 @@ class TMAISlackAgent:
                     return False
                 
                 function_name = value.get("function")
-                parameters = value.get("parameters", {})
                 
-                # Get the pending approval from the context
+                # Get the context FIRST before trying to access parameters
                 context = context_manager.get_context(context_id)
+                
+                # Check if parameters are referenced by ID or included directly
+                params_id = value.get("params_id")
+                if params_id and context:
+                    # Retrieve parameters from context only if context exists
+                    retrieved_params = context.get(params_id, {})
+                    if retrieved_params:
+                        parameters = retrieved_params
+                    else:
+                        # If no parameters were found by ID, fallback to direct parameters
+                        parameters = value.get("parameters", {})
+                else:
+                    # Fallback to direct parameters (for backward compatibility)
+                    parameters = value.get("parameters", {})
+                
+                # If no context found, just log a warning but continue with the parameters from the button
                 if not context:
-                    logger.error(f"No context found for ID {context_id}")
-                    return False
+                    logger.warning(f"No context found for ID {context_id}, but will proceed with opening modal anyway")
+                    context = {}
+                    
+                # IMPORTANT: Use a separate task for initializing SlackModals to minimize delay
+                # before using the trigger_id
+                slack_modals = None
                 
                 # Initialize SlackModals
-                from ops_slack.slack_modals import SlackModals
-                slack_modals = SlackModals(self.slack_client)
+                try:
+                    from ops_slack.slack_modals import SlackModals
+                    slack_modals = SlackModals(self.slack_client)
+                except Exception as e:
+                    logger.error(f"Error initializing SlackModals: {str(e)}")
+                    return False
                 
                 # Open appropriate modal based on function
                 if function_name == "createIssue":
+                    # Log trigger_id right before modal open
+                    logger.info(f"TRIGGER DEBUG: About to open createIssue modal with trigger_id: {trigger_id}")
+                    
+                    # Ensure we pass the exact trigger_id string without any modifications
+                    trigger_id_value = str(trigger_id).strip()
+                    
                     # Open create issue modal
                     await slack_modals.open_create_issue_modal(
-                        trigger_id=trigger_id,
+                        trigger_id=trigger_id_value,
                         prefilled_data=parameters,
                         conversation_id=f"{channel_id}:{thread_ts}"
                     )
                     
-                    # Update the button message to show modal was opened
-                    await asyncio.to_thread(
-                        self.slack_client.chat_update,
-                        channel=channel_id,
-                        ts=message_ts,
+                    # Update the button message in the background
+                    asyncio.create_task(self._update_button_message(
+                        channel_id=channel_id,
+                        message_ts=message_ts,
                         text="Creating a new Linear issue",
-                        blocks=[
-                            {
-                                "type": "section",
-                                "text": {
-                                    "type": "mrkdwn",
-                                    "text": "*Issue creation form opened*\nPlease complete the form to create the issue."
-                                }
-                            }
-                        ]
-                    )
+                        message="*Issue creation form opened*\nPlease complete the form to create the issue."
+                    ))
                     
                 elif function_name == "updateIssue":
                     # Get issue number from parameters
@@ -1698,32 +1821,28 @@ class TMAISlackAgent:
                         logger.error("No issue number found in parameters")
                         return False
                     
-                    # Open update issue modal
+                    # Log trigger_id right before modal open
+                    logger.info(f"TRIGGER DEBUG: About to open updateIssue modal with trigger_id: {trigger_id}")
+                    
+                    # Ensure we pass the exact trigger_id string without any modifications
+                    trigger_id_value = str(trigger_id).strip()
+                    
+                    # Open update issue modal - do this immediately before the trigger_id expires
                     await slack_modals.open_update_issue_modal(
-                        trigger_id=trigger_id,
+                        trigger_id=trigger_id_value,
                         issue_number=issue_number,
                         prefilled_data=parameters,
                         conversation_id=f"{channel_id}:{thread_ts}"
                     )
                     
-                    # Update the button message to show modal was opened
-                    await asyncio.to_thread(
-                        self.slack_client.chat_update,
-                        channel=channel_id,
-                        ts=message_ts,
+                    # Update the button message in the background
+                    asyncio.create_task(self._update_button_message(
+                        channel_id=channel_id,
+                        message_ts=message_ts,
                         text="Updating Linear issue",
-                        blocks=[
-                            {
-                                "type": "section",
-                                "text": {
-                                    "type": "mrkdwn",
-                                    "text": f"*Issue update form opened*\nPlease complete the form to update issue #{issue_number}."
-                                }
-                            }
-                        ]
-                    )
-                    return True
-                
+                        message=f"*Issue update form opened*\nPlease complete the form to update issue #{issue_number}."
+                    ))
+                    
                 return True
                 
             except Exception as e:
@@ -1734,15 +1853,45 @@ class TMAISlackAgent:
                     channel_id = payload.get("channel", {}).get("id")
                     thread_ts = payload.get("container", {}).get("thread_ts") or payload.get("message", {}).get("thread_ts")
                     
+                    # Provide more helpful error message based on the error type
+                    error_message = str(e)
+                    if "invalid_arguments" in error_message:
+                        error_message = "Error opening form: The form data may be too large or the request timed out. Please try again with a more concise description or try creating the issue with fewer details."
+                    elif "trigger_id_invalid" in error_message:
+                        error_message = "Error opening form: Your interaction has expired. Please try again by clicking the button."
+                    
                     await asyncio.to_thread(
                         self.slack_client.chat_postMessage,
                         channel=channel_id,
                         thread_ts=thread_ts,
-                        text=f"Error opening form: {str(e)}"
+                        text=error_message
                     )
                 except Exception:
                     pass
                     
                 return False
         
+        return False
+
+    async def _update_button_message(self, channel_id: str, message_ts: str, text: str, message: str):
+        """Helper method to update button messages after modal is opened"""
+        try:
+            await asyncio.to_thread(
+                self.slack_client.chat_update,
+                channel=channel_id,
+                ts=message_ts,
+                text=text,
+                blocks=[
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": message
+                        }
+                    }
+                ]
+            )
+        except Exception as e:
+            logger.error(f"Error updating button message: {str(e)}")
+            
         return False 

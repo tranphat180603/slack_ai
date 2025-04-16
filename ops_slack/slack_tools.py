@@ -222,6 +222,16 @@ class SlackClient:
         Returns:
             Dictionary with search results and metadata
         """
+
+        #distinguish between DMs and mention:
+        if ":" in channel_id:
+            # DM
+            parts = channel_id.split(":")
+            channel_id = parts[0]
+            thread_ts = parts[1]
+        else:
+            # Mention
+            channel_id = channel_id
         # Validate parameters
         if time_range not in ["hours", "days", "weeks"]:
             time_range = "days"  # Default to days
@@ -280,19 +290,35 @@ class SlackClient:
             if message_count > 100 and result.get("has_more", False):
                 # Continue fetching older messages
                 cursor = result["response_metadata"]["next_cursor"]
-                while len(messages) < message_count and cursor:
-                    more_result = self.client.conversations_history(
-                        channel=channel_id,
-                        cursor=cursor,
-                        limit=min(100, message_count - len(messages)),
-                        inclusive=True
-                    )
-                    messages.extend(more_result["messages"])
-                    if more_result.get("has_more", False):
-                        cursor = more_result["response_metadata"]["next_cursor"]
-                    else:
-                        break
-            
+                if ":" in channel_id:
+                    # if mention, use only channel_id
+                    while len(messages) < message_count and cursor:
+                        more_result = self.client.conversations_history(
+                            channel=channel_id,
+                            cursor=cursor,
+                            limit=min(100, message_count - len(messages)),
+                            inclusive=True
+                        )
+                        messages.extend(more_result["messages"])
+                        if more_result.get("has_more", False):
+                            cursor = more_result["response_metadata"]["next_cursor"]
+                        else:
+                            break
+                # if DM, use channel_id and thread_ts
+                else:
+                    while len(messages) < message_count and cursor:
+                        more_result = self.client.conversations_replies(
+                            channel=channel_id,
+                            ts=thread_ts,
+                            cursor=cursor,
+                            limit=min(100, message_count - len(messages)),
+                            inclusive=True
+                        )
+                        messages.extend(more_result["messages"])
+                        if more_result.get("has_more", False):
+                            cursor = more_result["response_metadata"]["next_cursor"]
+                        else:
+                            break
             # Apply username filter if specified
             if username:
                 logger.info(f"Filtering messages by username: {username}")
@@ -459,3 +485,12 @@ class SlackClient:
                 "error": str(e.response['error'])
             }
 
+if __name__ == "__main__":
+    import os
+    import dotenv
+    from dotenv import load_dotenv
+    load_dotenv()
+    import asyncio
+    slack_client = SlackClient(bot_token=os.getenv("SLACK_BOT_TOKEN"))
+    history = asyncio.run(slack_client.search_channel_history(channel_id="D08KJP0UG30:1744797953.841869"))
+    print(history)

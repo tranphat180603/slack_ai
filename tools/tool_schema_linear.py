@@ -121,9 +121,9 @@ CREATE_ISSUE_SCHEMA = {
                 "type": "string",
                 "description": "Name of the project to add the issue to"
             },
-            "cycle_name": {
-                "type": "string",
-                "description": "Name of the cycle to add the issue to"
+            "cycle_number": {
+                "type": "integer",
+                "description": "Number of the cycle to add the issue to"
             },
             "parent_issue_number": {
                 "type": "integer",
@@ -143,6 +143,10 @@ UPDATE_ISSUE_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
+            "team_key": {
+                "type": "string",
+                "description": "The team key to update the issue in (enum: ENG, OPS, RES, AI, MKT, PRO)"
+            },
             "issue_number": {
                 "type": "integer",
                 "description": "The number of the issue to update"
@@ -184,9 +188,9 @@ UPDATE_ISSUE_SCHEMA = {
                 "type": "string",
                 "description": "Name of the project to move the issue to"
             },
-            "cycle_name": {
-                "type": "string",
-                "description": "Name of the cycle to move the issue to"
+            "cycle_number": {
+                "type": "integer",
+                "description": "Number of the cycle to move the issue to"
             },
             "parent_issue_number": {
                 "type": "integer",
@@ -197,7 +201,7 @@ UPDATE_ISSUE_SCHEMA = {
                 "description": "Whether to archive the issue"
             }
         },
-        "required": ["issue_number"],
+        "required": ["team_key", "issue_number"],
         "additionalProperties": False
     }
 }

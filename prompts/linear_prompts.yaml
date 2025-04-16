@@ -26,12 +26,18 @@ linear:
         {
           "plan_description": "A detailed description of the overall plan",
           "function_levels": [
-            ["function1", "function2"],  // Level 1 (independent functions)
-            ["function3"],              // Level 2 (depends on Level 1)
-            ["function4", "function5"]  // Level 3 (depends on Level 2)
+            ["function1", "function2"],
+            ["function3"],
+            ["function4", "function5"]
+              <... and so on>
           ]
         }
-
+        Each list in the "function_levels" array is a level of functions that can be executed in parallel.
+        The first list is the first level of functions that can be executed immediately with no dependencies.
+        The second list is the second level of functions that depend on results from the first level.
+        The third list is the third level of functions that depend on results from the second level.
+        And so on.
+        
       user_template: |
         Here's the list of available functions/tools:
         {{linear_tools}}

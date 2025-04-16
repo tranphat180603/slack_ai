@@ -13,7 +13,7 @@ linear_tools:
           state_name: "Name of the workflow state (e.g. 'Todo', 'In Progress', 'Done')"
           label_names: "List of label names to apply to the issue"
           project_name: "Name of the project to add the issue to"
-          cycle_name: "Name of the cycle to add the issue to (must always be the current cycle of the correct team)"
+          cycle_number: "Number of the cycle to add the issue to (must always be the current cycle of the correct team)"
           parent_issue_number: "Issue number of the parent issue"
         outputs: Created issue details
         required_inputs:
@@ -23,6 +23,7 @@ linear_tools:
       - name: updateIssue
         description: "GraphQL-based function to update an existing issue in Linear. This should only be executed after having detected which specific issue (and the issue number) is going to be updated with the context gathered. Whatever you do, must filter and get the exact content exists in the issue before updating it."
         inputs:
+          team_key: "The team key to update the issue in (enum: ENG, OPS, RES, AI, MKT, PRO)"
           issue_number: "The number of the issue to update"
           title: "New title for the issue. If not changed, must repeat the old title. Do not leave it blank."
           description: "New markdown description for the issue. If not changed, must repeat the old description. Always try to groom the description carefully if the user requests."
@@ -32,12 +33,13 @@ linear_tools:
           state_name: "New workflow state name (e.g. 'Todo', 'In Progress', 'Done')"
           label_names: "New list of label names (search for labels using the getAllLabels function)"
           project_name: "Name of the project to move the issue to"
-          cycle_name: "Name of the cycle to move the issue to (must always be the current cycle of the correct team)"
+          cycle_number: "Number of the cycle to move the issue to (must always be the current cycle of the correct team)"
           parent_issue_number: "Issue number of the new parent issue"
           archived: "Whether to archive the issue"
         outputs: Updated issue details
         required_inputs:
           - issue_number
+          - team_key
 
       - name: createComment
         description: "GraphQL-based function to create a new comment on an issue. This should only be executed after having detected which specific issue (and the issue number) is going to be commented on with the context gathered. Whatever you do, must filter and get the exact content exists in the issue before commenting on it."
