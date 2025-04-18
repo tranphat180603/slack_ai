@@ -8,12 +8,14 @@ from .tool_schema_linear import LINEAR_SCHEMAS
 from .tool_schema_slack import SLACK_SCHEMAS
 from .tool_schema_semantic_search import SEMANTIC_SEARCH_SCHEMAS
 from .tool_schema_website import WEBSITE_SCHEMAS
+from .tool_schema_gdrive import GDRIVE_SCHEMAS
 # Import tools implementation
 from .tools_declaration import (
     # Classes
     LinearTools,
     SlackTools,
     WebsiteTools,
+    GDriveTools,
     # Exceptions
     LinearError,
     LinearAuthError,
@@ -24,6 +26,7 @@ from .tools_declaration import (
     linear_tools,
     slack_tools,
     website_tools,
+    gdrive_tools,
 )
 
 # Export all schemas and tools
@@ -33,10 +36,12 @@ __all__ = [
     'SLACK_SCHEMAS',
     'SEMANTIC_SEARCH_SCHEMAS',
     'WEBSITE_SCHEMAS',
+    'GDRIVE_SCHEMAS',
     # Tool classes
     'LinearTools',
     'SlackTools',
     'WebsiteTools',
+    'GDriveTools',
     # Exceptions
     'LinearError',
     'LinearAuthError',
@@ -47,4 +52,5 @@ __all__ = [
     'linear_tools',
     'slack_tools',
     'website_tools',
+    'gdrive_tools',
 ] 

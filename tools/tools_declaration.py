@@ -40,6 +40,8 @@ from ops_website_db.website_db import WebsiteDB
 # Import Slack tools
 from ops_slack.slack_tools import SlackClient
 
+from ops_gdrive.gdrive_tools import GoogleDriveClient
+
 # Parameter adapter for Linear methods
 class LinearParameterAdapter:
     """Handles conversion of flat parameters to nested structures for Linear API"""
@@ -1311,14 +1313,16 @@ class LinearTools:
 class SlackTools:
     """Wrapper for Slack API tools"""
     
-    def __init__(self, bot_token: str = None, user_token: str = None):
+    def __init__(self, bot_token: str = None, user_token: str = None, context_id: str = None):
         """
         Initialize Slack tools with tokens.
         
         Args:
             bot_token: Slack bot token (defaults to SLACK_BOT_TOKEN environment variable)
             user_token: Optional Slack user token (defaults to SLACK_USER_TOKEN environment variable)
+            context_id: Optional context ID for conversation history
         """
+        self._context_id = context_id
         if bot_token is None:
             bot_token = os.environ.get("SLACK_BOT_TOKEN")
             
@@ -1381,24 +1385,92 @@ class SlackTools:
         """Format text for Slack display"""
         self._check_client()
         return self.client.format_for_slack(text)
+        
+    async def get_conversation_context(self, max_messages: int = 10) -> List[str]:
+        """
+        Get conversation context for the current conversation.
+        Uses the context_id to retrieve channel_id and thread_ts.
+        
+        Args:
+            max_messages: Maximum number of messages to retrieve
+            
+        Returns:
+            List of formatted message strings
+        """
+        self._check_client()
+        
+        # Get context_id from the instance
+        if not hasattr(self, '_context_id') or not self._context_id:
+            logger.error("No context_id set on SlackTools instance")
+            return ["Error: No conversation context available"]
+        
+        # Import context_manager
+        from context_manager import context_manager
+        
+        # Parse channel_id and thread_ts from the context_id
+        # Context ID format is "channel_id:thread_ts"
+        try:
+            parts = self._context_id.split(':', 1)
+            if len(parts) == 2:
+                channel_id, thread_ts = parts
+                logger.info(f"Retrieved channel_id={channel_id}, thread_ts={thread_ts} from context_id")
+                
+                # Call the client method with the extracted parameters
+                return await self.client.get_conversation_context(
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    max_messages=max_messages
+                )
+            else:
+                # Attempt to get from context directly
+                context = context_manager.get_context(self._context_id)
+                if context and 'channel_id' in context and 'thread_ts' in context:
+                    channel_id = context['channel_id']
+                    thread_ts = context['thread_ts']
+                    logger.info(f"Retrieved channel_id={channel_id}, thread_ts={thread_ts} from context data")
+                    
+                    return await self.client.get_conversation_context(
+                        channel_id=channel_id,
+                        thread_ts=thread_ts,
+                        max_messages=max_messages
+                    )
+                else:
+                    logger.error(f"Invalid context_id format: {self._context_id}")
+                    return ["Error: Could not parse conversation context information"]
+        except Exception as e:
+            logger.error(f"Error retrieving conversation context: {str(e)}")
+            return [f"Error retrieving conversation context: {str(e)}"]
 
 class WebsiteTools:
     def __init__(self):
         self.db = WebsiteDB()
 
-    def search_website_content(self, query: str, website_type: str, limit: int) -> List[Dict[str, Any]]:
-        return self.db.search_website_content(query=query, website_type=website_type)
+    def search_website_content(self, query: str, website_type: str = None, distinct_on_url: bool = False, return_full_content: bool = False, limit: int = 5) -> List[Dict[str, Any]]:
+        return self.db.search_website_content(query=query, website_type=website_type, distinct_on_url=distinct_on_url, return_full_content=return_full_content, limit=limit)
+    
+class GDriveTools:
+    def __init__(self):
+        self.gdrive_client = GoogleDriveClient()
+
+    def search_drive_files(self, query: str, limit: int) -> List[Dict[str, Any]]:
+        return self.gdrive_client.search_drive_files(query=query, limit=limit)
+
+    def get_drive_file_content(self, file_id: str) -> str:
+        return self.gdrive_client.get_drive_file_content(file_id=file_id)
+
     
 # Create singleton instances
 linear_tools = LinearTools()
 slack_tools = SlackTools()
 website_tools = WebsiteTools()
+gdrive_tools = GDriveTools()
 # Export all tools
 __all__ = [
     # Classes
     'LinearTools',
     'SlackTools',
     'WebsiteTools',
+    'GDriveTools',
     'LinearClient',
     'SlackClient',
     
@@ -1416,4 +1488,5 @@ __all__ = [
     'linear_tools',
     'slack_tools',
     'website_tools',
+    'gdrive_tools',
 ] 

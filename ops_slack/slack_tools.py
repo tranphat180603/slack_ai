@@ -16,6 +16,7 @@ import asyncio
 import json
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Union, Tuple
+from ops_conversation_db.conversation_db import load_conversation_from_db
 
 import openai
 from slack_sdk import WebClient
@@ -199,6 +200,213 @@ class SlackClient:
         text = re.sub(html_pattern, r'\1', text)
         
         return text
+    
+    async def get_conversation_context(
+        self, 
+        channel_id: str, 
+        thread_ts: str, 
+        max_messages: int = 10,
+    ) -> Union[List[str], List[Dict]]:
+        """
+        Get conversation context either from cached history or by fetching from Slack API.
+        
+        This function serves as the main entry point for retrieving conversation context.
+        It can either return all messages (formatted for context) or only the user messages.
+        
+        Args:
+            channel_id: The Slack channel ID
+            thread_ts: The thread timestamp to fetch conversation from
+            max_messages: Maximum number of messages to include. Including both user and assistant messages
+            
+        Returns:
+            If user_messages_only=True: List of user message strings
+            If user_messages_only=False: List of formatted messages with sender context
+        """
+        # First use cached history if available
+        
+        # Otherwise, fetch from Slack API
+        #try to load from db
+        db_messages = load_conversation_from_db(channel_id, thread_ts)
+    
+        if db_messages:
+            logger.debug(f"Loaded conversation history from database with {len(db_messages)} messages")
+            history_result = self._format_history_for_context(db_messages, max_messages)
+            return history_result
+        
+        conversation_history = []
+        
+        try:
+            # For both DMs and threads, use conversations_replies which works more reliably
+            # The test shows this works better than using conversations_history for DMs
+            logger.debug(f"Fetching conversation from Slack API for {channel_id}:{thread_ts}")
+            response = self.client.conversations_replies(
+                channel=channel_id,
+                ts=thread_ts,
+                limit=30  # Fetch more than we need to account for filtering
+            )
+            
+            if response.get("ok") and response.get("messages"):
+                messages = response.get("messages", [])
+                logger.debug(f"Received {len(messages)} raw messages from Slack API")
+                
+                
+                # Process messages into conversation history
+                seen_ts = set()  # Track seen message timestamps to avoid duplicates
+                
+                for msg in messages:
+                    # Get the timestamp to identify this message
+                    msg_ts = msg.get("ts")
+                    
+                    # Skip if we've already seen this message
+                    if msg_ts in seen_ts:
+                        logger.debug(f"Skipping duplicate message with ts: {msg_ts}")
+                        continue
+                    
+                    seen_ts.add(msg_ts)
+                    
+                    # Determine if it's a user or bot message
+                    is_bot = msg.get("bot_id") is not None
+                    text = msg.get("text", "")
+                    
+                    # Skip empty messages
+                    if not text:
+                        logger.debug(f"Skipping empty message with ts: {msg_ts}")
+                        continue
+                        
+                    # Skip processing messages
+                    if is_bot and ("TMAI's neuron firing" in text or "is thinking" in text):
+                        logger.debug(f"Skipping processing message: {text[:30]}...")
+                        continue
+                    
+                    # Skip in-progress messages unless it's a real user message or a final message
+                    if is_bot and any(marker in text for marker in ["Commander:", "Plan:", "Soldier execute:"]):
+                        logger.debug(f"Skipping intermediate message")
+                        continue
+                        
+                    
+                    # Add to conversation history
+                    role = "assistant" if is_bot else "user"
+                    logger.debug(f"Adding message: role={role}, content={text[:30]}...")
+                    conversation_history.append({
+                        "role": role,
+                        "content": text,
+                        "timestamp": float(msg_ts),
+                        "message_ts": msg_ts
+                    })
+                
+                logger.debug(f"Built conversation history with {len(conversation_history)} messages")
+                
+
+                return self._format_history_for_context(conversation_history, max_messages)
+                
+            else:
+                logger.warning(f"Failed to get thread replies: {response.get('error', 'Unknown error')}")
+                
+                # Fallback: If conversations_replies fails and this is a DM, try conversations_history
+                logger.debug("Falling back to conversations_history for DM")
+                try:
+                    response = self.client.conversations_history(
+                        channel=channel_id,
+                        limit=30
+                    )
+                    
+                    if response.get("ok") and response.get("messages"):
+                        messages = response.get("messages", [])
+                        logger.debug(f"Fallback returned {len(messages)} messages")
+                        
+                        # For DMs using conversations_history, we need a different filter approach
+                        thread_messages = []
+                        seen_msgs = set()
+                        
+                        # First pass: Find the root message and any direct replies
+                        for msg in messages:
+                            msg_ts = msg.get("ts")
+                            
+                            # Find the root message of this thread
+                            if msg_ts == thread_ts:
+                                thread_messages.append(msg)
+                                seen_msgs.add(msg_ts)
+                                
+                            # Find any message that belongs to this thread
+                            if msg.get("thread_ts") == thread_ts:
+                                thread_messages.append(msg)
+                                seen_msgs.add(msg_ts)
+                        
+                        # Process these messages now
+                        conversation_history = []
+                        for msg in thread_messages:
+                            is_bot = msg.get("bot_id") is not None
+                            text = msg.get("text", "")
+                            
+                            if not text:
+                                continue
+                                
+                            # Skip system messages
+                            if is_bot and any(marker in text for marker in ["TMAI's neuron firing", "is thinking", "Commander:", "Plan:", "Soldier execute:"]):
+                                continue
+                                
+                            # Skip thread signal
+                            if "New Assistant Thread" in text:
+                                continue
+                            
+                            role = "assistant" if is_bot else "user"
+                            conversation_history.append({
+                                "role": role,
+                                "content": text,
+                                "timestamp": float(msg.get("ts")),
+                                "message_ts": msg.get("ts")
+                            })
+
+                    return self._format_history_for_context(conversation_history, max_messages)
+                except Exception as e:
+                        logger.error(f"Error in fallback: {str(e)}")
+                
+                return []
+                
+        except SlackApiError as e:
+            logger.error(f"Error getting thread replies: {e.response['error']}")
+            return []
+    
+    def _format_history_for_context(self, conversation_history: List[Dict], max_messages: int = 10) -> List[str]:
+        """
+        Format conversation history for context.
+        
+        Args:
+            conversation_history: List of conversation messages (with role and content)
+            max_messages: Maximum number of messages to include
+            
+        Returns:
+            List of formatted message strings
+        """
+        if not conversation_history:
+            return []
+        
+        history_context = []
+        
+        # Limit to max_messages most recent messages
+        messages = conversation_history
+        if len(messages) > max_messages:
+            messages = messages[-max_messages:]
+            history_context = ["**Conversation History:** Showing only the most recent messages."]
+        else:
+            history_context = ["**Here is the conversation history so far:**"]
+        
+        # Format the messages for context
+        for msg in messages:
+            if msg.get("role") == "user":
+                # Format user messages with sender name
+                msg_content = msg.get('content', '')
+                history_context.append(f"**User:** {msg_content}")
+            else:
+                # Format assistant messages
+                content = msg.get("content", '')
+                history_context.append(f"**Assistant:** {content}")
+        
+        # Add a separator at the end
+        if history_context:
+            history_context.append("--------------------------------------------------\n")
+        
+        return history_context
     
     async def search_channel_history(
         self,
@@ -491,6 +699,36 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
     import asyncio
-    slack_client = SlackClient(bot_token=os.getenv("SLACK_BOT_TOKEN"))
-    history = asyncio.run(slack_client.search_channel_history(channel_id="D08KJP0UG30:1744797953.841869"))
-    print(history)
+    
+    async def main():
+        """Example usage of the SlackClient conversation context methods."""
+        # Initialize the Slack client
+        slack_client = SlackClient(bot_token=os.getenv("SLACK_BOT_TOKEN"))
+        
+        # Channel and thread to retrieve conversation from - in a real application, 
+        # these would be determined from the current chat session
+        channel_id = "D08KJP0UG30"
+        thread_ts = "1744954542.920769"
+        
+        print(f"Testing conversation context retrieval")
+        print("-" * 60)
+        
+        # Example: Get conversation context with only max_messages
+        # In the actual implementation, the agent would pass channel_id and thread_ts 
+        # from the current context automatically
+        print("Example: Get conversation context with only max_messages parameter")
+        conversation = await slack_client.get_conversation_context(
+            channel_id=channel_id,  # In production, this would come from current context
+            thread_ts=thread_ts,    # In production, this would come from current context
+            max_messages=100        # This is the only parameter that would be passed by the LLM/user
+        )
+        
+        print(f"Retrieved {len(conversation)} messages from conversation")
+        # Display the messages
+        for msg in conversation:
+            print(msg)
+        
+        print("\nDone!")
+    
+    # Run the example
+    asyncio.run(main())

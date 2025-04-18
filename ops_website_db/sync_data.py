@@ -443,16 +443,6 @@ def main():
     crawl_parser.add_argument("--max-wait", type=int, 
                              help="Maximum wait time in seconds for crawl jobs (default: 600)")
     
-    # Scrape command
-    scrape_parser = subparsers.add_parser("scrape", help="Scrape a single URL")
-    scrape_parser.add_argument("url", help="URL to scrape")
-    
-    # Batch scrape command
-    batch_scrape_parser = subparsers.add_parser("batch_scrape", help="Scrape multiple URLs from a file")
-    batch_scrape_parser.add_argument("file", help="File with one URL per line")
-    batch_scrape_parser.add_argument("--delay", type=int, default=2, 
-                                    help="Delay in seconds between requests")
-    
     # Status command
     status_parser = subparsers.add_parser("status", help="Check database status")
     
@@ -487,58 +477,10 @@ def main():
                 else:
                     print(f"Stored {stats['stored_urls']} pages with {stats['total_chunks']} chunks")
                     
-        elif args.command == "scrape":
-            success = crawler.scrape_single_url(args.url)
-            if success:
-                print(f"Successfully scraped and stored URL: {args.url}")
-            else:
-                print(f"Failed to scrape URL: {args.url}")
-                
-        elif args.command == "batch_scrape":
-            # Read URLs from file
-            try:
-                with open(args.file, 'r') as f:
-                    urls = [line.strip() for line in f if line.strip()]
-                    
-                if not urls:
-                    print(f"No URLs found in file: {args.file}")
-                    sys.exit(1)
-                
-                print(f"Found {len(urls)} URLs to scrape")
-                successful = 0
-                failed = 0
-                
-                # Process each URL
-                for i, url in enumerate(urls):
-                    print(f"[{i+1}/{len(urls)}] Scraping: {url}")
-                    try:
-                        success = crawler.scrape_single_url(url)
-                        if success:
-                            successful += 1
-                            print(f"✓ Successfully scraped: {url}")
-                        else:
-                            failed += 1
-                            print(f"✗ Failed to scrape: {url}")
-                        
-                        # Sleep to avoid rate limiting
-                        if i < len(urls) - 1:  # Don't sleep after the last URL
-                            print(f"Waiting {args.delay} seconds before next request...")
-                            time.sleep(args.delay)
-                    except Exception as e:
-                        failed += 1
-                        print(f"✗ Error scraping {url}: {str(e)}")
-                
-                # Print summary
-                print(f"\nBatch scrape completed: {successful} successful, {failed} failed")
-                
-            except Exception as e:
-                print(f"Error reading URL file: {str(e)}")
-                sys.exit(1)
                 
         elif args.command == "status":
             from ops_website_db.website_db import check_database_status
             check_database_status()
-            
         else:
             parser.print_help()
             

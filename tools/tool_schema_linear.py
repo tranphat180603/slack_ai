@@ -281,12 +281,6 @@ GET_TEAMS_SCHEMA = {
     "type": "function",
     "name": "getAllTeams",
     "description": "GraphQL-based function to get all teams in Linear",
-    "parameters": {
-        "type": "object",
-        "properties": {},
-        "required": [],
-        "additionalProperties": False
-    }
 }
 
 # Schema for getting all projects in a team
@@ -482,24 +476,6 @@ GET_CURRENT_USER_SCHEMA = {
     }
 }
 
-# Schema for getting user message by number
-GET_USER_MESSAGE_BY_NUMBER_SCHEMA = {
-    "type": "function",
-    "name": "getUserMessageByNumber",
-    "description": "Retrieves the N most recent user messages from the current conversation thread. This is useful when you need to get the precise wording of recent messages, especially for long texts or when creating issues/tickets.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "number": {
-                "type": "integer",
-                "description": "The number of most recent user messages to retrieve (e.g., 5 means retrieve the 5 most recent user messages)"
-            }
-        },
-        "required": ["number"],
-        "additionalProperties": False
-    }
-}
-
 # Collection of all schemas
 LINEAR_SCHEMAS = {
     "filterIssues": FILTER_ISSUES_SCHEMA,
@@ -517,7 +493,6 @@ LINEAR_SCHEMAS = {
     "filterCycles": FILTER_CYCLES_SCHEMA,
     "createComment": CREATE_COMMENT_SCHEMA,
     "getCurrentUser": GET_CURRENT_USER_SCHEMA,
-    "getUserMessageByNumber": GET_USER_MESSAGE_BY_NUMBER_SCHEMA
 }
 
 

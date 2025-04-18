@@ -10,6 +10,8 @@ import psycopg2
 from typing import Dict, List, Any, Optional, Tuple, Iterator, Generator
 from dotenv import load_dotenv
 from ops_linear_db.linear_rag_embeddings import get_embedding
+from bs4 import BeautifulSoup
+import markdown
 
 # Fix imports when running as a script
 if __name__ == "__main__":
@@ -35,6 +37,13 @@ class WebsiteDB:
     def __init__(self):
         """Initialize the database interface."""
         self.initialize_database()
+
+    def clean_text(self, text: str) -> str:
+        # 1. Convert Markdown to HTML
+        html = markdown.markdown(text, extensions=['extra', 'smarty'])
+        # 2. Strip HTML as above
+        soup = BeautifulSoup(html, 'html.parser')
+        return ' '.join(soup.get_text(separator=' ').split())
     
     def initialize_database(self):
         """Create the database schema for website content storage."""
@@ -268,84 +277,152 @@ class WebsiteDB:
                     return False
     
     def search_website_content(
-        self, 
-        query: str = None, 
-        website_type: str = None,
-        limit: int = 5
+        self,
+        query: Optional[str] = None,
+        website_type: Optional[str] = None,
+        distinct_on_url: bool = False,
+        return_full_content: bool = False,
+        limit: int = 5,
     ) -> List[Dict[str, Any]]:
         """
-        Search website_content, filtering by type or URL if given,
-        and ordering by vector similarity if `query` is given.
-        """
-        # 1) If we have a text query, compute its embedding and
-        #    format it as a pgvector literal
-        vector_literal = None
-        if query is not None:
-            emb = get_embedding(query)  # List[float]
-            # build a string like "[0.1,0.2,0.3,…]"
-            vector_literal = "[" + ",".join(f"{x:.6f}" for x in emb) + "]"
+        Search website_content.
 
-        # 2) Build dynamic SELECT / SIMILARITY expression
-        if vector_literal is not None:
-            sim_select = "1 - (embedding <=> %s::vector) AS similarity"
+        Parameters
+        ----------
+        query : str | None
+            If provided, a text query that will be embedded and used for vector
+            similarity search.
+        website_type : str | None
+            Optional filter on the website_type enum column.
+        distinct_on_url : bool
+            When True, collapse results so you get at most one row per URL.
+        return_full_content : bool
+            When True, include the 'full_content' column in SELECT and in the
+            returned dicts (only present for the chunk that originally stored it).
+        limit : int
+            Maximum number of rows to return *after* DISTINCT ON (if enabled).
+        """
+        # ------------------------------------------------------------------ #
+        # 1. Build embedding for the query (if any)
+        # ------------------------------------------------------------------ #
+        vector_literal: Optional[str] = None
+        if query:
+            embedding = get_embedding(query)  # -> List[float]
+            vector_literal = "[" + ",".join(f"{x:.6f}" for x in embedding) + "]"
+
+        # ------------------------------------------------------------------ #
+        # 2. Similarity select fragment
+        # ------------------------------------------------------------------ #
+        similarity_expr = (
+            "1 - (embedding <=> %s::vector) AS similarity"
+            if vector_literal is not None
+            else "NULL AS similarity"
+        )
+
+        # ------------------------------------------------------------------ #
+        # 3. SELECT clause
+        # ------------------------------------------------------------------ #
+        column_list = [
+            "id",
+            "url",
+            "title",
+        ]
+        if return_full_content:
+            column_list.append("full_content")
+        column_list.extend(["content_chunk", "metadata"])
+
+        select_columns = ", ".join(column_list) + f", {similarity_expr}"
+
+        if distinct_on_url:
+            select_sql = f"SELECT DISTINCT ON (url) {select_columns} FROM website_content"
         else:
-            sim_select = "NULL AS similarity"
+            select_sql = f"SELECT {select_columns} FROM website_content"
 
-        select_sql = f"""
-            SELECT id, url, title, content_chunk, metadata,
-                   {sim_select}
-            FROM website_content
-        """
-
-        # 3) Build WHERE clauses & params
-        where_clauses = []
+        # ------------------------------------------------------------------ #
+        # 4. WHERE clause
+        # ------------------------------------------------------------------ #
+        where_parts: List[str] = []
         params: List[Any] = []
 
         if vector_literal is not None:
-            where_clauses.append("embedding IS NOT NULL")
-            # this parameter is only for the SELECT-similarity
-            params.append(vector_literal)
+            where_parts.append("embedding IS NOT NULL")
+            params.append(vector_literal)  # for the similarity expression
 
         if website_type:
             if website_type not in self.WEBSITE_TYPES:
                 raise ValueError(f"Invalid website_type: {website_type}")
-            where_clauses.append("website_type = %s")
+            where_parts.append("website_type = %s")
             params.append(website_type)
 
-        where_sql = ""
-        if where_clauses:
-            where_sql = "WHERE " + " AND ".join(where_clauses)
+        where_sql = "WHERE " + " AND ".join(where_parts) if where_parts else ""
 
-        # 4) ORDER BY only if we have a vector
-        order_sql = ""
-        if vector_literal is not None:
-            order_sql = "ORDER BY embedding <=> %s::vector"
-            # note: append again for ORDER BY
-            params.append(vector_literal)
-
-        # 5) Finally, LIMIT
+        # ------------------------------------------------------------------ #
+        # 5. ORDER BY clause
+        # ------------------------------------------------------------------ #
+        if distinct_on_url:
+            if vector_literal is not None:
+                order_sql = "ORDER BY url, embedding <=> %s::vector"
+                params.append(vector_literal)  # second time for ORDER BY
+            else:
+                order_sql = "ORDER BY url, updated_at DESC"
+        else:
+            if vector_literal is not None:
+                order_sql = "ORDER BY embedding <=> %s::vector"
+                params.append(vector_literal)  # second time for ORDER BY
+            else:
+                order_sql = ""
+        
+        # ------------------------------------------------------------------ #
+        # 6. LIMIT
+        # ------------------------------------------------------------------ #
         limit_sql = "LIMIT %s"
         params.append(limit)
 
-        sql = "\n".join([select_sql, where_sql, order_sql, limit_sql])
+        # ------------------------------------------------------------------ #
+        # 7. Assemble final SQL
+        # ------------------------------------------------------------------ #
+        sql = "\n".join(
+            part for part in (select_sql, where_sql, order_sql, limit_sql) if part
+        )
 
-        # 6) Execute
+        # ------------------------------------------------------------------ #
+        # 8. Execute
+        # ------------------------------------------------------------------ #
         with get_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, tuple(params))
                 rows = cur.fetchall()
 
-        # 7) Map to dict
-        results = []
+        # ------------------------------------------------------------------ #
+        # 9. Map results back to Python dicts
+        # ------------------------------------------------------------------ #
+        results: List[Dict[str, Any]] = []
         for row in rows:
-            results.append({
-                "id": row[0],
-                "url": row[1],
-                "title": row[2],
-                "content": row[3],
-                "metadata": row[4],
-                "similarity": row[5],
-            })
+            idx = 0
+            result = {
+                "id": row[idx],
+                "url": row[idx + 1],
+                "title": row[idx + 2],
+            }
+            idx += 3
+
+            if return_full_content:
+                raw_full = row[idx]
+                result["full_content"] = (
+                    self.clean_text(raw_full) if raw_full is not None else None
+                )
+                idx += 1
+
+
+            result.update(
+                {
+                    "content": row[idx],
+                    "metadata": row[idx + 1],
+                    "similarity": row[idx + 2],
+                }
+            )
+            results.append(result)
+
         return results
     
     def get_stats(self) -> Dict[str, Any]:
@@ -424,7 +501,9 @@ if __name__ == "__main__":
         check_database_status()
         
         # Search for content
-        results = db.search_website_content()
-        print(results)
+        results = db.search_website_content(query="Token Metrics API", distinct_on_url=True, return_full_content=True, limit=10, website_type="main")
+        for result in results:
+            print(result)
+            print("--------------------------------")
     except Exception as e:
         print(f"✗ Error creating database schema: {str(e)}")

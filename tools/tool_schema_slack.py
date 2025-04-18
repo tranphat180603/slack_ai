@@ -136,6 +136,25 @@ SEND_MESSAGE_SCHEMA = {
     }
 }
 
+# Schema for getting conversation context
+GET_CONVERSATION_CONTEXT_SCHEMA = {
+    "type": "function",
+    "name": "get_conversation_context",
+    "description": "Get the conversation context for the current chat session. This will automatically use the current channel and thread. Use this function when you need to summarize or refer to previous messages in the conversation.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "max_messages": {
+                "type": "integer",
+                "description": "Maximum number of messages to retrieve from the conversation history. Default is 10. Use a larger number (e.g., 20-30) for longer context, or a smaller number (e.g., 5) for just recent messages."
+            }
+        },
+        "additionalProperties": False
+    }
+}
+
+
+
 # Collection of all Slack schemas
 SLACK_SCHEMAS = {
     "search_channel_history": SEARCH_CHANNEL_HISTORY_SCHEMA,
@@ -143,5 +162,6 @@ SLACK_SCHEMAS = {
     "get_current_user": GET_CURRENT_USER_SCHEMA,
     "get_channels": GET_CHANNELS_SCHEMA,
     "get_channel_members": GET_CHANNEL_MEMBERS_SCHEMA,
-    "send_message": SEND_MESSAGE_SCHEMA
+    "send_message": SEND_MESSAGE_SCHEMA,
+    "get_conversation_context": GET_CONVERSATION_CONTEXT_SCHEMA
 } 

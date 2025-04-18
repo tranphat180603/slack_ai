@@ -42,8 +42,11 @@ TOOLS_CONFIG = {
     "github": {
         "enabled": os.getenv("GITHUB_TOKEN") is not None
     },
-    "url": {
+    "website": {
         "enabled": True
+    },
+    "gdrive": {
+        "enabled": os.getenv("GOOGLE_CLIENT_ID") is not None
     }
 }
 
@@ -1011,8 +1014,6 @@ class TMAISlackAgent:
                     # Make the Captain API call for planning
                     if iteration > 1 or execution_results:
                         current_plan = self.captain.plan(current_order, platforms, execution_results)
-                        #then reset the execution_results
-                        execution_results = {}
                     else:
                         current_plan = self.captain.plan(current_order, platforms)
                     
@@ -1434,6 +1435,7 @@ class TMAISlackAgent:
         """Send the response to Slack."""
         full_response = ""
         buffer = ""
+        full_response_to_return = ""
         if not stream:
             try:
                 await asyncio.to_thread(
@@ -1475,16 +1477,27 @@ class TMAISlackAgent:
                             ts=message_ts,
                             text=full_response[:3000]
                         )
+                        full_response_to_return += full_response[:3000]
                         #after we have sent the first 3000 characters, we can reset the full_response
                         full_response = full_response[3000:]
                         # create a new message for the residual response
-                        next_message = await asyncio.to_thread(
-                            self.slack_client.chat_postMessage,
-                            channel=ai_request.channel_id,
-                            thread_ts=thread_ts,
-                            text=full_response,
-                            unfurl_links=False,
-                        )
+                        if len(full_response) > 0:
+                            next_message = await asyncio.to_thread(
+                                self.slack_client.chat_postMessage,
+                                channel=ai_request.channel_id,
+                                thread_ts=thread_ts,
+                                text=full_response,
+                                unfurl_links=False,
+                            )
+                            full_response_to_return += full_response
+                        else:
+                            next_message = await asyncio.to_thread(
+                                self.slack_client.chat_postMessage,
+                                channel=ai_request.channel_id,
+                                thread_ts=thread_ts,
+                                text="...",
+                                unfurl_links=False,
+                            )
                         # Use the new message TS for any upcoming updates
                         message_ts = next_message["ts"]
                         buffer = ""
@@ -1506,9 +1519,9 @@ class TMAISlackAgent:
                         ts=message_ts,
                         text=full_response,
                     )
-                
+                    full_response_to_return += full_response
                 # Return the complete response string for conversation history
-                return full_response
+                return full_response_to_return
                 
             except Exception as e:
                 logger.error(f"Error during streaming response: {str(e)}")

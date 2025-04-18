@@ -55,14 +55,6 @@ linear_tools:
 
   - category: "EXPLORE: Low-effort functions that are used to explore how data on Linear looks like. You can just randomly fill in the inputs in the enum fields to see what data you can get. Always prioritize to use functions inside this section first before using the other sections."
     tools:
-      - name: getUserMessageByNumber
-        description: Retrieves the N most recent user messages from the current conversation thread. This is useful when you need to get the precise wording of recent messages, especially for long texts or when creating issues/tickets.
-        inputs:
-          number: "The number of most recent user messages to retrieve (e.g., 5 means retrieve the 5 most recent user messages)"
-        outputs: "List of strings containing the exact content of the requested number of user messages"
-        required_inputs:
-          - number
-
       - name: getAllUsers
         description: GraphQL-based function to get all users in a specified Linear team
         inputs:
@@ -168,6 +160,14 @@ linear_tools:
 slack_tools:
   - category: "Slack communication tools"
     tools:
+      - name: get_conversation_context
+        description: Get the conversation context for the current chat session. Use this function to return the full conversation history of the current chat session, in case you want to refer to previous messages for important information as the history context you get at the beginning is just a truncated version. Limit by the number of messages you want to retrieve.
+        inputs:
+          max_messages: "Maximum number of messages to retrieve from the conversation history. Default is 10. Use a larger number (e.g., 20-30) for longer context, or a smaller number (e.g., 5) for just recent messages."
+        outputs: "Array of formatted message strings"
+        required_inputs:
+          - max_messages
+
       - name: search_channel_history
         description: Search Slack channel history with specific filters to find relevant messages
         inputs:
@@ -194,34 +194,6 @@ slack_tools:
         outputs: "User object with metadata"
         required_inputs: []
 
-github_tools:
-  - category: "GitHub repository management tools"
-    tools:
-      - name: list_repositories
-        description: Lists repositories the authenticated user has access to
-        inputs:
-          visibility: "Filter by visibility (enum: all, public, private)"
-          sort: "Sort by property (enum: created, updated, pushed, full_name)"
-          direction: "Sort direction (enum: asc, desc)"
-          per_page: "Number of results per page"
-        outputs: "Array of repository objects"
-        required_inputs: []
-
-      - name: get_repository_issues
-        description: Lists issues for a specific repository
-        inputs:
-          owner: "Repository owner"
-          repo: "Repository name"
-          state: "Filter by issue state (enum: open, closed, all)"
-          labels: "Comma-separated list of label names"
-          sort: "Sort by property (enum: created, updated, comments)"
-          direction: "Sort direction (enum: asc, desc)"
-          since: "ISO 8601 timestamp to filter by updated date"
-        outputs: "Array of issue objects"
-        required_inputs:
-          - owner
-          - repo 
-
 website_tools:
   - category: "Website content search tools. Used for searching data about Token Metrics and its products."
     tools:
@@ -230,7 +202,30 @@ website_tools:
         inputs:
           query: "The query to search the chunked website content inside a RAG database storing website content."
           website_type: "The type of website to search (enum: main, research, blog)"
+          distinct_on_url: "Whether to search for distinct content across multiple sites of Token Metrics, by default it will prioritize the most relevant content  (or closest) to the query, but this flag set to True helps you search more general information about the website across many sites of Token Metrics. And maybe sometimes at the expense of relevance. So set this to False if you prioritize relevance over general information."
+          return_full_content: "Whether to return the full content of the website which contains the chunk. This helps when you want more granular information about a specific website. So as a rule of thumb, only use this in combination with distinct_on_url set to True."
           limit: "The maximum number of results to return"
         outputs: "Array of matching website content objects with metadata"
         required_inputs:
           - None
+
+gdrive_tools:
+  - category: "Google Drive content search tools. Used for searching data about Token Metrics and its products."
+    tools:
+      - name: search_drive_files
+        description: Search Google Drive for files matching a natural language query.
+        inputs:
+          query: "The query to search the Google Drive for files"
+          limit: "The maximum number of results to return"
+        outputs: "Array of matching file objects with metadata"
+        required_inputs:
+          - query
+          - limit
+
+      - name: get_drive_file_content
+        description: Retrieve the full text content of a Google Drive file by its file ID. Everytime you call it, it only returns the content of a single file. You can call it multiple times to get the content of multiple files.
+        inputs:
+          file_id: "The ID of the file to retrieve content from"
+        outputs: "The full text content of the file"
+        required_inputs:
+          - file_id

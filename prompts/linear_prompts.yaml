@@ -21,7 +21,7 @@ linear:
         - Level 2 contains functions that depend on results from Level 1, and so on
         - Functions within the same level should be independent of each other and can be executed in parallel
 
-        Return a JSON response with the following fields without additional text:
+        Return a JSON response with the following fields without additional text and any kind of comments in the JSON response:
         {
           "plan_description": "A detailed description of the overall plan",
           "function_levels": [

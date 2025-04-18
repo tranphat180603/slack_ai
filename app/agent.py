@@ -8,7 +8,7 @@ from typing import Dict, List, Any, Optional, Union, Iterator
 import re
 
 from llm.openai_client import OpenaiClient, CancellableOpenAIClient, CancellationError
-from tools import LINEAR_SCHEMAS, SLACK_SCHEMAS, SEMANTIC_SEARCH_SCHEMAS, WEBSITE_SCHEMAS
+from tools import LINEAR_SCHEMAS, SLACK_SCHEMAS, SEMANTIC_SEARCH_SCHEMAS, WEBSITE_SCHEMAS, GDRIVE_SCHEMAS
 
 # Configure logger
 logger = logging.getLogger("agent")
@@ -125,11 +125,13 @@ class Commander:
         self.model = model
         self.client = CancellableOpenAIClient(os.getenv("OPENAI_API_KEY"), model=model, context_id=context_id)
         self.prompts = prompts or {}
+        self.context_id = context_id
         logger.info(f"Commander initialized with model {model}")
 
     def set_context_id(self, context_id: str):
         """Set the context ID for cancellation checks."""
         self.client.set_context_id(context_id)
+        self.context_id = context_id
 
     def format_prompt(self, prompt_name: str, prompt_vars: Dict[str, Any]) -> Dict[str, str]:
         """Format a prompt template with provided variables."""
@@ -650,6 +652,7 @@ class Captain:
         self.model = model
         self.client = CancellableOpenAIClient(os.getenv("OPENAI_API_KEY"), model=model, context_id=context_id)
         self.prompts = prompts or {}
+        self.context_id = context_id
         logger.info(f"Captain initialized with model {model}")
         if logger.isEnabledFor(logging.DEBUG) and prompts:
             logger.debug(f"Captain loaded with {len(prompts)} prompt categories")
@@ -657,6 +660,7 @@ class Captain:
     def set_context_id(self, context_id: str):
         """Set the context ID for cancellation checks."""
         self.client.set_context_id(context_id)
+        self.context_id = context_id
 
     def format_prompt(self, prompt_name: str, prompt_vars: Dict[str, Any]) -> Dict[str, str]:
         """Format a prompt template with provided variables."""
@@ -738,6 +742,8 @@ class Captain:
             prompt_vars["github_tools"] = tools_text
         elif platform == "website":
             prompt_vars["website_tools"] = tools_text
+        elif platform == "gdrive":
+            prompt_vars["gdrive_tools"] = tools_text
         else:
             # Fallback to a generic name
             prompt_vars["tools"] = tools_text
@@ -1038,6 +1044,7 @@ class Soldier:
         self.model = model
         self.client = CancellableOpenAIClient(os.getenv("OPENAI_API_KEY"), model=model, context_id=context_id)
         self.prompts = prompts or {}
+        self.context_id = context_id
         logger.info(f"Soldier initialized with model {model}")
         if logger.isEnabledFor(logging.DEBUG) and prompts:
             logger.debug(f"Soldier loaded with {len(prompts)} prompt categories")
@@ -1045,6 +1052,7 @@ class Soldier:
     def set_context_id(self, context_id: str):
         """Set the context ID for cancellation checks."""
         self.client.set_context_id(context_id)
+        self.context_id = context_id
     
     def format_prompt(self, prompt_name: str, prompt_vars: Dict[str, Any]) -> Dict[str, str]:
         """Format a prompt template with provided variables."""
@@ -1122,6 +1130,11 @@ class Soldier:
             platform = "website"
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(f"[Soldier] {function_name} is a Website tool")
+        elif function_name in GDRIVE_SCHEMAS:
+            tool_schema = GDRIVE_SCHEMAS[function_name]
+            platform = "gdrive"
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"[Soldier] {function_name} is a Google Drive tool")
         if not tool_schema:
             logger.error(f"No schema found for function: {function_name}")
             return {
@@ -1181,7 +1194,7 @@ class Soldier:
                 }
             
             # Import tool implementations here to avoid circular imports
-            from tools.tools_declaration import linear_tools, slack_tools, website_tools
+            from tools.tools_declaration import linear_tools, slack_tools, website_tools, gdrive_tools
             
             # Map function name to implementation
             tool_implementations = {
@@ -1202,16 +1215,19 @@ class Soldier:
                 "createComment": linear_tools.createComment,
                 "getCurrentUser": linear_tools.getCurrentUser,
                 "semantic_search_linear": linear_tools.semantic_search_linear,
-                "getUserMessageByNumber": linear_tools.getUserMessageByNumber,
                 
                 # Slack tools
                 "search_channel_history": slack_tools.search_channel_history,
                 "get_users": slack_tools.get_users,
                 "get_current_user": slack_tools.get_current_user,
+                "get_conversation_context": slack_tools.get_conversation_context,
 
                 # Website tools
                 "search_website_content": website_tools.search_website_content,
 
+                # Google Drive tools
+                "search_drive_files": gdrive_tools.search_drive_files,
+                "get_drive_file_content": gdrive_tools.get_drive_file_content,
             }
             
             # Get the tool implementation
@@ -1247,8 +1263,15 @@ class Soldier:
                         "description": f"Waiting for approval to {function_name}"
                     }
                 
+                # Special setup for Slack tools that need context_id
+                if function_name == "get_conversation_context":
+                    # Set the context_id on the slack_tools instance
+                    slack_tools._context_id = self.context_id
+                    
+                    logger.info(f"Set context ID {self.context_id} on slack_tools for {function_name}")
+                
                 # Handle async functions
-                if function_name == "search_channel_history":
+                if function_name in ["search_channel_history", "get_conversation_context"]:
                     result = await tool_func(**params)
                 else:
                     result = tool_func(**params)

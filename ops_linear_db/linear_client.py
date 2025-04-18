@@ -56,34 +56,6 @@ class LinearClient:
         except Exception as e:
             raise LinearAuthError(f"Failed to initialize Linear client: {str(e)}")
     
-    def getUserMessageByNumber(self, number: int, conversation_history: list) -> list:
-        """
-        Retrieve the most recent N user messages from conversation history.
-        
-        Args:
-            number: The number of most recent user messages to retrieve
-            conversation_history: List of conversation messages from ConversationManager
-            
-        Returns:
-            List of the most recent user messages content or an empty list if none found
-        """
-        if not conversation_history:
-            return []
-            
-        # Filter only user messages
-        user_messages = [msg for msg in conversation_history if msg.get("role") == "user"]
-        
-        # Validate number
-        if number <= 0 or not user_messages:
-            return []
-            
-        # Get the specified number of most recent messages
-        # If number is greater than available messages, return all
-        result_messages = user_messages[-number:] if number < len(user_messages) else user_messages
-        
-        # Return the message contents
-        return [msg.get("content", "") for msg in result_messages]
-    
     # ---------------------------
     # Core Data Retrieval Functions (Team-Scoped)
     # ---------------------------

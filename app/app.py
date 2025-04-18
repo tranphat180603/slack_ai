@@ -95,7 +95,8 @@ try:
         'linear_prompts.yaml', 
         'slack_prompt.yaml', 
         'github_prompt.yaml', 
-        'website_prompt.yaml'
+        'website_prompt.yaml',
+        'gdrive_prompts.yaml'
     ]
     
     logger.info(f"Loading prompts from {len(prompt_files)} files")
