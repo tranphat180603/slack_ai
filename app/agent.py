@@ -8,7 +8,7 @@ from typing import Dict, List, Any, Optional, Union, Iterator
 import re
 
 from llm.openai_client import OpenaiClient, CancellableOpenAIClient, CancellationError
-from tools import LINEAR_SCHEMAS, SLACK_SCHEMAS, SEMANTIC_SEARCH_SCHEMAS
+from tools import LINEAR_SCHEMAS, SLACK_SCHEMAS, SEMANTIC_SEARCH_SCHEMAS, WEBSITE_SCHEMAS
 
 # Configure logger
 logger = logging.getLogger("agent")
@@ -736,8 +736,8 @@ class Captain:
             prompt_vars["slack_tools"] = tools_text
         elif platform == "github":
             prompt_vars["github_tools"] = tools_text
-        elif platform == "url":
-            prompt_vars["url_tools"] = tools_text
+        elif platform == "website":
+            prompt_vars["website_tools"] = tools_text
         else:
             # Fallback to a generic name
             prompt_vars["tools"] = tools_text
@@ -774,6 +774,7 @@ class Captain:
             
             # Parse JSON response
             try:
+                logger.debug(f"[Captain] Plan response: {response}")
 
                 if response.startswith("```json"):
                     response = response[len("```json"):].strip()
@@ -1116,7 +1117,11 @@ class Soldier:
             platform = "linear"  # Use linear prompt for semantic search
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(f"[Soldier] {function_name} is a Semantic Search tool (using linear prompts)")
-        
+        elif function_name in WEBSITE_SCHEMAS:
+            tool_schema = WEBSITE_SCHEMAS[function_name]
+            platform = "website"
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"[Soldier] {function_name} is a Website tool")
         if not tool_schema:
             logger.error(f"No schema found for function: {function_name}")
             return {
@@ -1176,7 +1181,7 @@ class Soldier:
                 }
             
             # Import tool implementations here to avoid circular imports
-            from tools.tools_declaration import linear_tools, slack_tools
+            from tools.tools_declaration import linear_tools, slack_tools, website_tools
             
             # Map function name to implementation
             tool_implementations = {
@@ -1203,6 +1208,10 @@ class Soldier:
                 "search_channel_history": slack_tools.search_channel_history,
                 "get_users": slack_tools.get_users,
                 "get_current_user": slack_tools.get_current_user,
+
+                # Website tools
+                "search_website_content": website_tools.search_website_content,
+
             }
             
             # Get the tool implementation

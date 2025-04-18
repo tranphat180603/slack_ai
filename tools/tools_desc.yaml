@@ -221,3 +221,16 @@ github_tools:
         required_inputs:
           - owner
           - repo 
+
+website_tools:
+  - category: "Website content search tools. Used for searching data about Token Metrics and its products."
+    tools:
+      - name: search_website_content
+        description: Search the website for content based on a natural language query. Or by specific website type.
+        inputs:
+          query: "The query to search the chunked website content inside a RAG database storing website content."
+          website_type: "The type of website to search (enum: main, research, blog)"
+          limit: "The maximum number of results to return"
+        outputs: "Array of matching website content objects with metadata"
+        required_inputs:
+          - None

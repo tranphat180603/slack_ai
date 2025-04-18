@@ -9,8 +9,7 @@ linear:
         The most basic and easiest data you can get at the first step is a specific user's information.
         
         You are given a list of available functions/tools which follows the GraphQL API of Linear that can be used to gather more information to fulfill the user's intention.
-        If previous execution results are provided, analyze them carefully to determine what information you already have and what additional information you need.
-        If there was a previous plan that failed, understand the reasons for failure and avoid making the same mistakes.
+        If there was a previous plan that failed and previous execution results are provided, understand the reasons for failure and avoid making the same mistakes. Then, come up with a new plan to gather the information needed to fulfill the user's intention.
         You must analyze carefully what information do you have and come up with valuable information for TMAI Agent to execute.
         
         IMPORTANT: 

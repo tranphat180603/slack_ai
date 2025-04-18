@@ -15,7 +15,7 @@ import re
 import uuid
 import requests
 import base64
-from typing import Dict, List, Any, Optional, Union, Callable
+from typing import Dict, List, Any, Optional, Union, Callable, Iterable
 
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
@@ -105,7 +105,8 @@ class ProgressiveMessageHandler:
                     channel=self.channel_id,
                     text="TMAI processing your request...",
                     thread_ts=self.thread_ts,
-                    blocks=blocks
+                    blocks=blocks,
+                    unfurl_links=False,
                 )
                 self.message_ts = response["ts"]
                 return response
@@ -115,7 +116,8 @@ class ProgressiveMessageHandler:
                     channel=self.channel_id,
                     ts=self.message_ts,
                     text="TMAI processing your request...",
-                    blocks=blocks
+                    blocks=blocks,
+                    unfurl_links=False,
                 )
         except SlackApiError as e:
             logger.warning(f"Error updating message: {e.response.get('error', '')}")
@@ -194,7 +196,8 @@ class ProgressiveMessageHandler:
                 self.slack_client.chat_postMessage,
                 channel=self.channel_id,
                 thread_ts=self.thread_ts,
-                text=f"Sorry, I encountered an error: {error_msg}"
+                text=f"Sorry, I encountered an error: {error_msg}",
+                unfurl_links=False,
             )
             await asyncio.to_thread(
                 self.slack_client.chat_delete,
@@ -246,7 +249,8 @@ class ProgressiveMessageHandler:
                     channel=self.channel_id,
                     text="TMAI processing your request...",
                     thread_ts=self.thread_ts,
-                    blocks=blocks
+                    blocks=blocks,
+                    unfurl_links=False,
                 )
                 self.message_ts = response["ts"]
                 return response
@@ -256,7 +260,8 @@ class ProgressiveMessageHandler:
                     channel=self.channel_id,
                     ts=self.message_ts,
                     text="TMAI processing your request...",
-                    blocks=blocks
+                    blocks=blocks,
+                    unfurl_links=False,
                 )
         except SlackApiError as e:
             logger.warning(f"Error updating message: {e.response.get('error', '')}")
@@ -867,7 +872,8 @@ class TMAISlackAgent:
                         self.slack_client.chat_postMessage,
                         channel=ai_request.channel_id,
                         thread_ts=effective_thread_ts,
-                        text=f"{image_analysis_output}"
+                        text=f"{image_analysis_output}",
+                        unfurl_links=False,
                     )
                     # Track message ID for later deletion
                     message_handler.progress_message_ids.append(response['ts'])
@@ -925,7 +931,8 @@ class TMAISlackAgent:
                 self.slack_client.chat_postMessage,
                 channel=ai_request.channel_id,
                 thread_ts=effective_thread_ts,
-                text=f"{commander_output}"
+                text=f"{commander_output}",
+                unfurl_links=False,
             )
             # Track message ID for later deletion
             message_handler.progress_message_ids.append(response['ts'])
@@ -1004,6 +1011,8 @@ class TMAISlackAgent:
                     # Make the Captain API call for planning
                     if iteration > 1 or execution_results:
                         current_plan = self.captain.plan(current_order, platforms, execution_results)
+                        #then reset the execution_results
+                        execution_results = {}
                     else:
                         current_plan = self.captain.plan(current_order, platforms)
                     
@@ -1023,7 +1032,8 @@ class TMAISlackAgent:
                         self.slack_client.chat_postMessage,
                         channel=ai_request.channel_id,
                         thread_ts=effective_thread_ts,
-                        text=f"{plan_output}"
+                        text=f"{plan_output}",
+                        unfurl_links=False,
                     )
                     # Track message ID for later deletion
                     message_handler.progress_message_ids.append(response['ts'])
@@ -1192,7 +1202,8 @@ class TMAISlackAgent:
                             self.slack_client.chat_postMessage,
                             channel=ai_request.channel_id,
                             thread_ts=effective_thread_ts,
-                            text=f"{execution_output}"
+                            text=f"{execution_output}",
+                            unfurl_links=False,
                         )
                         # Track message ID for later deletion
                         message_handler.progress_message_ids.append(response['ts'])
@@ -1352,7 +1363,8 @@ class TMAISlackAgent:
                                         }
                                     ]
                                 }
-                            ]
+                            ],
+                            unfurl_links=False,
                         )
                         
                         # Store the parameters in context for later retrieval
@@ -1418,16 +1430,18 @@ class TMAISlackAgent:
                 except Exception as log_error:
                     logger.error(f"Error generating usage reports: {str(log_error)}")
     
-    async def _send_response(self, response: str, ai_request: AIRequest, thread_ts: str, stream: bool = False):
+    async def _send_response(self, response: str | Iterable[str], ai_request: AIRequest, thread_ts: str, stream: bool = False):
         """Send the response to Slack."""
         full_response = ""
+        buffer = ""
         if not stream:
             try:
                 await asyncio.to_thread(
                     self.slack_client.chat_postMessage,
                     channel=ai_request.channel_id,
                     thread_ts=thread_ts,
-                    text=response
+                    text=response,
+                    unfurl_links=False,
                 )
                 return response
             except SlackApiError as e:
@@ -1439,11 +1453,10 @@ class TMAISlackAgent:
                 self.slack_client.chat_postMessage,
                 channel=ai_request.channel_id,
                 thread_ts=thread_ts,
-                text="Generating response..."
+                text="Generating response...",
+                unfurl_links=False,
             )
             message_ts = init_response["ts"]
-            buffer = ""
-            
             try:
                 # Process each chunk from the stream
                 for chunk in response:            
@@ -1453,26 +1466,30 @@ class TMAISlackAgent:
                             full_response += delta
                             buffer += delta
                     
-                    # because can't update a message that's too long. Will create a new message. Reset full_response every 1000 characters.
-                    if len(full_response) >= 1000:
-                        # create a chunk for the first 1000
-                        chunk = full_response[:1000]
-                        full_response = full_response[1000:]
-                        
-                        # post a new message with chunk
+                    # because can't update a message that's too long. Will create a new message. Reset full_response every 3000 characters.
+                    if len(full_response) >= 3000:
+                        # create a chunk for the first 3000 characters                        
+                        await asyncio.to_thread(
+                            self.slack_client.chat_update,
+                            channel=ai_request.channel_id,
+                            ts=message_ts,
+                            text=full_response[:3000]
+                        )
+                        #after we have sent the first 3000 characters, we can reset the full_response
+                        full_response = full_response[3000:]
+                        # create a new message for the residual response
                         next_message = await asyncio.to_thread(
                             self.slack_client.chat_postMessage,
                             channel=ai_request.channel_id,
                             thread_ts=thread_ts,
-                            text=chunk
+                            text=full_response,
+                            unfurl_links=False,
                         )
-                        
                         # Use the new message TS for any upcoming updates
                         message_ts = next_message["ts"]
-
-
-                    # Update the message when buffer is large enough. Reset buffer every 300 characters.
-                    if len(buffer) >= 300:
+                        buffer = ""
+                    # Update the message when buffer is large enough. Reset buffer every 500 characters.
+                    if len(buffer) >= 500:
                         await asyncio.to_thread(
                             self.slack_client.chat_update,
                             channel=ai_request.channel_id,
@@ -1480,16 +1497,14 @@ class TMAISlackAgent:
                             text=full_response
                         )
                         buffer = ""
-                        await asyncio.sleep(0.1)
-                    
                 
-                # Send the final update with the complete response
-                if full_response and len(full_response) < 1000:
+                # Send the final update with the residual response
+                if buffer:
                     await asyncio.to_thread(
                         self.slack_client.chat_update,
                         channel=ai_request.channel_id,
                         ts=message_ts,
-                        text=full_response
+                        text=full_response,
                     )
                 
                 # Return the complete response string for conversation history
@@ -1598,7 +1613,8 @@ class TMAISlackAgent:
                     self.slack_client.chat_postMessage,
                     channel=channel_id,
                     thread_ts=thread_ts,
-                    text="Processing stopped at your request. Feel free to ask a new question."
+                    text="Processing stopped at your request. Feel free to ask a new question.",
+                    unfurl_links=False,
                 )
                 
                 return True
@@ -1693,7 +1709,8 @@ class TMAISlackAgent:
                             self.slack_client.chat_postMessage,
                             channel=channel_id,
                             thread_ts=thread_ts,
-                            text=f"Successfully executed {function_name}: {result.get('result', 'No result')}"
+                            text=f"Successfully executed {function_name}: {result.get('result', 'No result')}",
+                            unfurl_links=False,
                         )
                     except Exception as e:
                         logger.error(f"Error executing approved function {function_name}: {str(e)}")
@@ -1702,7 +1719,8 @@ class TMAISlackAgent:
                             self.slack_client.chat_postMessage,
                             channel=channel_id,
                             thread_ts=thread_ts,
-                            text=f"Error executing {function_name}: {str(e)}"
+                            text=f"Error executing {function_name}: {str(e)}",
+                            unfurl_links=False,
                         )
                 else:
                     # Declined - just send a message
@@ -1710,7 +1728,8 @@ class TMAISlackAgent:
                         self.slack_client.chat_postMessage,
                         channel=channel_id,
                         thread_ts=thread_ts,
-                        text=f"Action {function_name} was declined."
+                        text=f"Action {function_name} was declined.",
+                        unfurl_links=False,
                     )
                 
                 # Remove the pending approval from the context
@@ -1864,7 +1883,8 @@ class TMAISlackAgent:
                         self.slack_client.chat_postMessage,
                         channel=channel_id,
                         thread_ts=thread_ts,
-                        text=error_message
+                        text=error_message,
+                        unfurl_links=False,
                     )
                 except Exception:
                     pass

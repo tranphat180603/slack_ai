@@ -34,6 +34,9 @@ from ops_linear_db.linear_rag_embeddings import (
     get_embedding
 )
 
+# Import Website tools
+from ops_website_db.website_db import WebsiteDB
+
 # Import Slack tools
 from ops_slack.slack_tools import SlackClient
 
@@ -1379,15 +1382,23 @@ class SlackTools:
         self._check_client()
         return self.client.format_for_slack(text)
 
+class WebsiteTools:
+    def __init__(self):
+        self.db = WebsiteDB()
+
+    def search_website_content(self, query: str, website_type: str, limit: int) -> List[Dict[str, Any]]:
+        return self.db.search_website_content(query=query, website_type=website_type)
+    
 # Create singleton instances
 linear_tools = LinearTools()
 slack_tools = SlackTools()
-
+website_tools = WebsiteTools()
 # Export all tools
 __all__ = [
     # Classes
     'LinearTools',
     'SlackTools',
+    'WebsiteTools',
     'LinearClient',
     'SlackClient',
     
@@ -1404,227 +1415,5 @@ __all__ = [
     # Singletons
     'linear_tools',
     'slack_tools',
+    'website_tools',
 ] 
-
-# Test functions for parameter adaptation
-def run_linear_tools_tests():
-    """Run tests for LinearTools methods with flat parameters (as returned by AI)"""
-    print("\n=== Running LinearTools Tests with Flat Parameters ===\n")
-    
-    # Test data
-    TEAM_KEY = "OPS"
-    USER_DISPLAY_NAME = "@Phat"
-    CYCLE_NUMBER = 42
-    
-    # Test getAllUsers
-    print("\n--- Testing getAllUsers ---")
-    try:
-        users = linear_tools.getAllUsers(TEAM_KEY)
-        print(f"Found {len(users)} users in team {TEAM_KEY}")
-    except Exception as e:
-        print(f"Error in getAllUsers: {str(e)}")
-    
-    # Test getCurrentUser
-    print("\n--- Testing getCurrentUser ---")
-    try:
-        user = linear_tools.getCurrentUser(USER_DISPLAY_NAME)
-        print(f"Found user: {user}")
-    except Exception as e:
-        print(f"Error in getCurrentUser: {str(e)}")
-    
-    # Test getAllProjects
-    print("\n--- Testing getAllProjects ---")
-    try:
-        projects = linear_tools.getAllProjects(TEAM_KEY)
-        print(f"Found {len(projects)} projects in team {TEAM_KEY}")
-    except Exception as e:
-        print(f"Error in getAllProjects: {str(e)}")
-    
-    # Test getAllCycles
-    print("\n--- Testing getAllCycles ---")
-    try:
-        cycles = linear_tools.getAllCycles(TEAM_KEY)
-        print(f"Found {len(cycles)} cycles in team {TEAM_KEY}")
-    except Exception as e:
-        print(f"Error in getAllCycles: {str(e)}")
-    
-    # Test getAllLabels
-    print("\n--- Testing getAllLabels ---")
-    try:
-        labels = linear_tools.getAllLabels(TEAM_KEY)
-        print(f"Found {len(labels)} labels in team {TEAM_KEY}")
-    except Exception as e:
-        print(f"Error in getAllLabels: {str(e)}")
-    
-    # Test getAllStates
-    print("\n--- Testing getAllStates ---")
-    try:
-        states = linear_tools.getAllStates(TEAM_KEY)
-        print(f"Found {len(states)} states in team {TEAM_KEY}")
-    except Exception as e:
-        print(f"Error in getAllStates: {str(e)}")
-    
-    # Test filterIssues with flat parameters - basic search
-    print("\n--- Testing filterIssues with flat parameters (basic) ---")
-    try:
-        issues = linear_tools.filterIssues(team_key=TEAM_KEY, first=5)
-        print(f"Found {len(issues)} issues with team_key={TEAM_KEY}")
-    except Exception as e:
-        print(f"Error in filterIssues (basic): {str(e)}")
-        
-    # Test filterIssues with flat parameters - complex search using correct fields
-    print("\n--- Testing filterIssues with flat parameters (complex) ---")
-    try:
-        issues = linear_tools.filterIssues(
-            team_key=TEAM_KEY,
-            priority=3.0,  # Medium priority
-            assignee_name="phat",
-            title_contains="Slack",
-            description_contains="Agent",
-            cycle_number=CYCLE_NUMBER,  # Use cycle_number instead of cycle_name
-            first=10
-        )
-        print(f"Found {len(issues)} issues with complex filter criteria")
-    except Exception as e:
-        print(f"Error in filterIssues (complex): {str(e)}")
-    
-    # Test filterUsers with flat parameters - active users
-    print("\n--- Testing filterUsers with flat parameters ---")
-    try:
-        users = linear_tools.filterUsers(display_name="phat", is_active=True)
-        print(f"Found {len(users)} active users matching display_name='phat'")
-    except Exception as e:
-        print(f"Error in filterUsers: {str(e)}")
-    
-    # Test filterProjects with flat parameters - using correct fields
-    print("\n--- Testing filterProjects with flat parameters ---")
-    try:
-        projects = linear_tools.filterProjects(
-            team_key=TEAM_KEY,
-            name="Core",  # Project name is available in the GraphQL query
-            state="started",  # Example state
-            lead_display_name="phat"  # Using the correct parameter name
-        )
-        print(f"Found {len(projects)} projects with filter criteria")
-    except Exception as e:
-        print(f"Error in filterProjects: {str(e)}")
-    
-    # Test filterCycles with flat parameters - using correct fields
-    print("\n--- Testing filterCycles with flat parameters ---")
-    try:
-        cycles = linear_tools.filterCycles(
-            team_key=TEAM_KEY,
-            number=CYCLE_NUMBER,  # Use number instead of name
-            filter_by_start_date=True
-        )
-        print(f"Found {len(cycles)} cycles with filter criteria")
-    except Exception as e:
-        print(f"Error in filterCycles: {str(e)}")
-    
-    # Test filterComments with flat parameters - using all fields from GraphQL
-    print("\n--- Testing filterComments with flat parameters ---")
-    try:
-        comments = linear_tools.filterComments(
-            issue_number=1,  # Using a known issue number
-            body_contains="test",  # Changed from 'contains' to 'body_contains'
-            user_display_name="Ngoc Phat"
-        )
-        print(f"Found {len(comments)} comments for issue #1")
-    except Exception as e:
-        print(f"Error in filterComments: {str(e)}")
-    
-    # Test filterAttachments with flat parameters - using all fields from GraphQL
-    print("\n--- Testing filterAttachments with flat parameters ---")
-    try:
-        attachments = linear_tools.filterAttachments(
-            issue_number=1,  # Using a known issue number
-            title_contains="document",
-            creator_display_name="Ngoc Phat"
-        )
-        print(f"Found {len(attachments)} attachments for issue #1")
-    except Exception as e:
-        print(f"Error in filterAttachments: {str(e)}")
-    
-    # Test createComment with flat parameters
-    print("\n--- Testing createComment with flat parameters ---")
-    try:
-        # This is just a test - we'll catch the exception without creating a real comment
-        try:
-            comment = linear_tools.createComment(
-                issue_number=999999,  # Using a non-existent issue number to avoid making real changes
-                body="This is a test comment"
-            )
-            print(f"Comment created: {comment}")
-        except LinearNotFoundError:
-            print("Test successful - caught expected error for non-existent issue")
-        except Exception as e:
-            print(f"Error in createComment: {str(e)}")
-    except Exception as e:
-        print(f"Error setting up createComment test: {str(e)}")
-    
-    # Test semantic_search_linear with flat parameters
-    print("\n--- Testing semantic_search_linear with flat parameters ---")
-    try:
-        results = linear_tools.semantic_search_linear(
-            query="Find OPS team issues about testing",
-            limit=3,
-            use_reranker=True,
-            candidate_pool_size=10,
-            team_key=TEAM_KEY,
-            object_type="Issue"
-        )
-        print(f"Found {len(results)} semantic search results")
-        print(results)
-    except Exception as e:
-        print(f"Error in semantic_search_linear: {str(e)}")
-    
-    print("\n=== LinearTools Tests Completed ===\n")
-
-# Run tests if file is executed directly
-if __name__ == "__main__":
-    # Temporarily test only filterIssues with specific parameters
-    print("\n=== Testing filterIssues with Specific Parameters ===\n")
-    
-    try:
-        issues = linear_tools.filterIssues(
-            team_key="OPS",
-            state="Todo",
-            priority=0.0,
-            assignee_name="phat",
-            assignee_contains="",
-            title_contains="",
-            description_contains="",
-            cycle_number=42,
-            project_id="",
-            label_name="",
-            first=50
-        )
-        print(f"Found {len(issues)} issues matching criteria")
-        print("Applied filter criteria:")
-        adapted = LinearParameterAdapter.adapt_filter_issues({
-            'team_key': 'OPS', 
-            'state': 'Todo', 
-            'priority': 0.0, 
-            'assignee_name': 'phat', 
-            'cycle_number': 42, 
-            'first': 50
-        })
-        print(f"  {adapted}")
-        
-        # Print first issue details if any found
-        if issues and len(issues) > 0:
-            print("\nFirst matching issue:")
-            issue = issues[0]
-            print(f"  Title: {issue.get('title')}")
-            print(f"  State: {issue.get('state', {}).get('name')}")
-            print(f"  Priority: {issue.get('priority')}")
-            print(f"  Assignee: {issue.get('assignee', {}).get('displayName')}")
-            if issue.get('cycle'):
-                print(f"  Cycle: #{issue.get('cycle').get('number')}")
-            
-    except Exception as e:
-        print(f"Error in filterIssues test: {str(e)}")
-    
-    print("\n=== FilterIssues Test Completed ===\n")
-    
-    # run_linear_tools_tests() # Original test function commented out 

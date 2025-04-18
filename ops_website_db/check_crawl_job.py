@@ -8,16 +8,29 @@ import sys
 import json
 import argparse
 import logging
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+import re
+import markdown
 
-# Fix imports when running as a script
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
+from ops_website_db.website_db import WebsiteDB
+from ops_website_db.sync_data import ContentChunker
 from ops_website_db.firecrawl_client import FirecrawlClient
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("check_crawl_job")
+
+import re
+
+
+def clean_text(md: str) -> str:
+    # 1. Convert Markdown to HTML
+    html = markdown.markdown(md, extensions=['extra', 'smarty'])
+    # 2. Strip HTML as above
+    soup = BeautifulSoup(html, 'html.parser')
+    return ' '.join(soup.get_text(separator=' ').split())
+
 
 def check_crawl_job(job_id, save_results=False, output_file=None):
     """
@@ -75,28 +88,21 @@ def check_crawl_job(job_id, save_results=False, output_file=None):
         
         # Print sample of page data
         if pages:
-            logger.info("Sample pages:")
-            for i, page in enumerate(pages[:-5]):  # Show last 5 pages
+            sample_content = pages[0].get("content", {}).get("markdown", "No content")
+            for i, page in enumerate(pages):
                 url = page.get("url", "No URL")
                 title = page.get("metadata", {}).get("title", "No title")
-                content = page.get("content", {}).get("markdown", "No content")
+                content = clean_text(page.get("content", {}).get("markdown", "No content"))
                 logger.info(f"  {i+1}. {title} - {url}")
-                logger.info(f"    Content: {content[:200]}...")  # Show first 200 characters of content
-                
-            # Show number of remaining pages
-            if len(pages) > 3:
-                logger.info(f"  ...and {len(pages) - 3} more")
     else:
         logger.warning("No pages found in result")
     
-    # Save results to file if requested
-    if save_results:
-        if not output_file:
-            output_file = f"{job_id}.json"
-            
-        logger.info(f"Saving results to {output_file}")
-        with open(output_file, 'w') as f:
-            json.dump(result, f, indent=2)
+    print(f"Sample page length: {len(sample_content)}")
+    # website_db = WebsiteDB()
+    content_chunker = ContentChunker()
+    print("Chunking content...")
+    for chunk in content_chunker.chunk_text(clean_text(sample_content)):
+        print(chunk, end="\n\n", flush=True)
     
     return result
 

@@ -7,8 +7,9 @@ import sys
 import logging
 import json
 import psycopg2
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Iterator, Generator
 from dotenv import load_dotenv
+from ops_linear_db.linear_rag_embeddings import get_embedding
 
 # Fix imports when running as a script
 if __name__ == "__main__":
@@ -179,57 +180,64 @@ class WebsiteDB:
         metadata: Dict[str, Any] = None
     ) -> bool:
         """
-        Store content chunks for a webpage.
-        
-        Args:
-            website_type: Type of website (main, research, blog)
-            url: The page URL
-            title: Page title
-            full_content: Complete page content
-            chunks: List of content chunks
-            metadata: Additional metadata
-            
-        Returns:
-            True if successful, False otherwise
+        Store content chunks and their embeddings for a webpage.
         """
         if website_type not in self.WEBSITE_TYPES:
             logger.error(f"Invalid website type: {website_type}")
             return False
             
-        if not metadata:
-            metadata = {}
-            
-        with get_db_connection() as conn:
-            with conn.cursor() as cur:
-                try:
-                    # Delete existing chunks for this URL if any
+        metadata_json = json.dumps(metadata or {})
+        total_chunks = len(chunks)
+        
+        try:
+            with get_db_connection() as conn:
+                conn.autocommit = False
+                with conn.cursor() as cur:
+                    # Remove any existing batch of chunks for this URL
                     cur.execute("DELETE FROM website_content WHERE url = %s", (url,))
                     
-                    # Insert new chunks
-                    for i, chunk in enumerate(chunks):
-                        cur.execute("""
-                        INSERT INTO website_content 
-                            (website_type, url, title, full_content, content_chunk, chunk_index, metadata)
-                        VALUES 
-                            (%s, %s, %s, %s, %s, %s, %s)
-                        """, (
-                            website_type, 
-                            url, 
-                            title, 
-                            full_content if i == 0 else None,  # Store full content only once
-                            chunk,
-                            i,
-                            json.dumps(metadata)
-                        ))
+                    batch_size = 20
+                    for i in range(0, total_chunks, batch_size):
+                        batch_end = min(i + batch_size, total_chunks)
+                        for j, chunk in enumerate(chunks[i:batch_end]):
+                            idx = i + j
+                            # Only store full_content on first chunk
+                            current_full = full_content if idx == 0 else None
+                            
+                            # **NEW**: compute embedding
+                            try:
+                                embedding = get_embedding(chunk)
+                            except Exception as e:
+                                logger.error(f"Embedding failed for chunk {idx}: {e}")
+                                embedding = None
+                            
+                            cur.execute("""
+                                INSERT INTO website_content
+                                  (website_type, url, title, full_content,
+                                   content_chunk, chunk_index, embedding, metadata)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                            """, (
+                                website_type,
+                                url,
+                                title,
+                                current_full,
+                                chunk,
+                                idx,
+                                embedding,
+                                metadata_json
+                            ))
+                        
+                        conn.commit()
+                        # free up memory between batches
+                        import gc; gc.collect()
                     
-                    conn.commit()
-                    logger.info(f"Stored {len(chunks)} chunks for URL: {url}")
+                    logger.info(f"Stored {total_chunks} chunks (with embeddings) for URL: {url}")
                     return True
-                    
-                except Exception as e:
-                    conn.rollback()
-                    logger.error(f"Error storing page chunks: {str(e)}")
-                    return False
+
+        except Exception as e:
+            logger.error(f"Error storing page chunks: {e}")
+            return False
+
     
     def update_embedding(self, chunk_id: str, embedding: List[float]) -> bool:
         """
@@ -259,91 +267,86 @@ class WebsiteDB:
                     logger.error(f"Error updating embedding: {str(e)}")
                     return False
     
-    def get_content_for_embedding(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """
-        Get content chunks that need embeddings.
-        
-        Args:
-            limit: Maximum number of chunks to return
-            
-        Returns:
-            List of chunks needing embeddings
-        """
-        with get_db_connection() as conn:
-            with conn.cursor() as cur:
-                try:
-                    cur.execute("""
-                    SELECT id, content_chunk
-                    FROM website_content
-                    WHERE embedding IS NULL
-                    LIMIT %s
-                    """, (limit,))
-                    
-                    results = cur.fetchall()
-                    return [{"id": row[0], "content": row[1]} for row in results]
-                    
-                except Exception as e:
-                    logger.error(f"Error getting content for embedding: {str(e)}")
-                    return []
-    
-    def search_similar_content(
+    def search_website_content(
         self, 
-        query_embedding: List[float], 
+        query: str = None, 
         website_type: str = None,
         limit: int = 5
     ) -> List[Dict[str, Any]]:
         """
-        Search for content similar to the query embedding.
-        
-        Args:
-            query_embedding: Vector embedding of the query
-            website_type: Optional filter by website type
-            limit: Maximum number of results
-            
-        Returns:
-            List of similar content chunks with metadata
+        Search website_content, filtering by type or URL if given,
+        and ordering by vector similarity if `query` is given.
         """
+        # 1) If we have a text query, compute its embedding and
+        #    format it as a pgvector literal
+        vector_literal = None
+        if query is not None:
+            emb = get_embedding(query)  # List[float]
+            # build a string like "[0.1,0.2,0.3,…]"
+            vector_literal = "[" + ",".join(f"{x:.6f}" for x in emb) + "]"
+
+        # 2) Build dynamic SELECT / SIMILARITY expression
+        if vector_literal is not None:
+            sim_select = "1 - (embedding <=> %s::vector) AS similarity"
+        else:
+            sim_select = "NULL AS similarity"
+
+        select_sql = f"""
+            SELECT id, url, title, content_chunk, metadata,
+                   {sim_select}
+            FROM website_content
+        """
+
+        # 3) Build WHERE clauses & params
+        where_clauses = []
+        params: List[Any] = []
+
+        if vector_literal is not None:
+            where_clauses.append("embedding IS NOT NULL")
+            # this parameter is only for the SELECT-similarity
+            params.append(vector_literal)
+
+        if website_type:
+            if website_type not in self.WEBSITE_TYPES:
+                raise ValueError(f"Invalid website_type: {website_type}")
+            where_clauses.append("website_type = %s")
+            params.append(website_type)
+
+        where_sql = ""
+        if where_clauses:
+            where_sql = "WHERE " + " AND ".join(where_clauses)
+
+        # 4) ORDER BY only if we have a vector
+        order_sql = ""
+        if vector_literal is not None:
+            order_sql = "ORDER BY embedding <=> %s::vector"
+            # note: append again for ORDER BY
+            params.append(vector_literal)
+
+        # 5) Finally, LIMIT
+        limit_sql = "LIMIT %s"
+        params.append(limit)
+
+        sql = "\n".join([select_sql, where_sql, order_sql, limit_sql])
+
+        # 6) Execute
         with get_db_connection() as conn:
             with conn.cursor() as cur:
-                try:
-                    if website_type and website_type in self.WEBSITE_TYPES:
-                        cur.execute("""
-                        SELECT 
-                            id, url, title, content_chunk, 
-                            metadata, 
-                            1 - (embedding <=> %s) as similarity
-                        FROM website_content
-                        WHERE 
-                            embedding IS NOT NULL AND
-                            website_type = %s
-                        ORDER BY embedding <=> %s
-                        LIMIT %s
-                        """, (query_embedding, website_type, query_embedding, limit))
-                    else:
-                        cur.execute("""
-                        SELECT 
-                            id, url, title, content_chunk, 
-                            metadata, 
-                            1 - (embedding <=> %s) as similarity
-                        FROM website_content
-                        WHERE embedding IS NOT NULL
-                        ORDER BY embedding <=> %s
-                        LIMIT %s
-                        """, (query_embedding, query_embedding, limit))
-                    
-                    results = cur.fetchall()
-                    return [{
-                        "id": row[0],
-                        "url": row[1],
-                        "title": row[2],
-                        "content": row[3],
-                        "metadata": row[4],
-                        "similarity": row[5]
-                    } for row in results]
-                    
-                except Exception as e:
-                    logger.error(f"Error searching similar content: {str(e)}")
-                    return []
+                cur.execute(sql, tuple(params))
+                rows = cur.fetchall()
+
+        # 7) Map to dict
+        results = []
+        for row in rows:
+            results.append({
+                "id": row[0],
+                "url": row[1],
+                "title": row[2],
+                "content": row[3],
+                "metadata": row[4],
+                "similarity": row[5],
+            })
+        return results
     
     def get_stats(self) -> Dict[str, Any]:
         """
@@ -420,5 +423,8 @@ if __name__ == "__main__":
         # Check and report on the database status
         check_database_status()
         
+        # Search for content
+        results = db.search_website_content()
+        print(results)
     except Exception as e:
         print(f"✗ Error creating database schema: {str(e)}")
