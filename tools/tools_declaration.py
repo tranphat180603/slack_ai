@@ -1371,20 +1371,10 @@ class SlackTools:
             message_count=message_count
         )
     
-    def get_users(self, display_name: str = None) -> List[Dict[str, Any]]:
-        """Get employee data by display name or get all employees"""
+    def get_user(self, display_name: str = None) -> List[Dict[str, Any]]:
+        """Display all users in the company"""
         self._check_client()
-        return self.client.get_employees_data(display_name)
-    
-    def extractUrls(self, text: str) -> List[str]:
-        """Extract URLs from text"""
-        self._check_client()
-        return self.client.extract_urls(text)
-    
-    def formatForSlack(self, text: str) -> str:
-        """Format text for Slack display"""
-        self._check_client()
-        return self.client.format_for_slack(text)
+        return self.client.get_current_user(display_name)
         
     async def get_conversation_context(self, max_messages: int = 10) -> List[str]:
         """

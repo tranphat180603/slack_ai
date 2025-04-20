@@ -1218,8 +1218,7 @@ class Soldier:
                 
                 # Slack tools
                 "search_channel_history": slack_tools.search_channel_history,
-                "get_users": slack_tools.get_users,
-                "get_current_user": slack_tools.get_current_user,
+                "get_user": slack_tools.get_user,
                 "get_conversation_context": slack_tools.get_conversation_context,
 
                 # Website tools

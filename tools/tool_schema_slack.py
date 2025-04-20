@@ -39,9 +39,9 @@ SEARCH_CHANNEL_HISTORY_SCHEMA = {
 }
 
 # Schema for getting users
-GET_USERS_SCHEMA = {
+GET_USER_SCHEMA = {
     "type": "function",
-    "name": "get_users",
+    "name": "get_user",
     "description": "Get user information for every employees in the company or a specific employee. By providing their display name, you can get the user's information. Or return all users if no display name is provided.",
     "parameters": {
         "type": "object",
@@ -158,10 +158,6 @@ GET_CONVERSATION_CONTEXT_SCHEMA = {
 # Collection of all Slack schemas
 SLACK_SCHEMAS = {
     "search_channel_history": SEARCH_CHANNEL_HISTORY_SCHEMA,
-    "get_users": GET_USERS_SCHEMA,
-    "get_current_user": GET_CURRENT_USER_SCHEMA,
-    "get_channels": GET_CHANNELS_SCHEMA,
-    "get_channel_members": GET_CHANNEL_MEMBERS_SCHEMA,
-    "send_message": SEND_MESSAGE_SCHEMA,
+    "get_user": GET_USER_SCHEMA,
     "get_conversation_context": GET_CONVERSATION_CONTEXT_SCHEMA
 } 

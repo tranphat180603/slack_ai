@@ -180,18 +180,11 @@ slack_tools:
         required_inputs:
           - channel_id
 
-      - name: get_users
+      - name: get_user
         description: "Get user information for every employee in the company or a specific employee. By providing their display name, you can get the user's information. Or return all users if no display name is provided."
         inputs:
           display_name: "The display name of the employee to search for (e.g. '@username')"
         outputs: "Array of Slack user objects with metadata"
-        required_inputs: []
-
-      - name: get_current_user
-        description: Get the current user's information on Slack
-        inputs:
-          user_id: "The ID of the user to get information for"
-        outputs: "User object with metadata"
         required_inputs: []
 
 website_tools:

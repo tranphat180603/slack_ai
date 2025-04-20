@@ -102,7 +102,7 @@ class SlackClient:
         
         return delay
     
-    def get_employees_data(self, display_name: str) -> List[Dict[str, Any]]:
+    def get_current_user(self, display_name: str = None) -> List[Dict[str, Any]]:
         users_list = [
         {'display_name': '@Talha', 'real_name': 'Talha Ahmad', 'title': 'Operations Manager', 'team': 'MKT'},
         {'display_name': '@Val', 'real_name': 'Valentine Enedah', 'title': 'CX', 'team': 'PRO'},
