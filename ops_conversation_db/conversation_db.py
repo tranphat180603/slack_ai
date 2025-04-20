@@ -222,13 +222,17 @@ def cleanup_old_conversations(hours: int = 24) -> int:
             conversation_ids = [conv.id for conv in old_conversations]
             count = len(conversation_ids)
             
-            # Delete conversations (cascade will delete messages too)
+            # Delete messages for old conversations first to avoid FK constraint errors
+            from ops_conversation_db.conversation_models import Message
+            db.query(Message).filter(
+                Message.conversation_id.in_(conversation_ids)
+            ).delete(synchronize_session=False)
+            # Delete conversations
             db.query(Conversation).filter(
-                Conversation.updated_at < cutoff_time
-            ).delete()
-            
+                Conversation.id.in_(conversation_ids)
+            ).delete(synchronize_session=False)
+            # Commit deletions
             db.commit()
-            
             logger.info(f"Cleaned up {count} old conversations")
             return count
             

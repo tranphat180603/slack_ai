@@ -1468,20 +1468,25 @@ class TMAISlackAgent:
                             full_response += delta
                             buffer += delta
                     
-                    # because can't update a message that's too long. Will create a new message. Reset full_response every 3000 characters.
+                    # avoid splitting words when full_response grows too long
                     if len(full_response) >= 3000:
-                        # create a chunk for the first 3000 characters                        
+                        # find last space before cutoff to split cleanly
+                        split_index = full_response.rfind(' ', 0, 3000)
+                        if split_index == -1:
+                            split_index = 3000
+                        first_part = full_response[:split_index]
+                        remainder = full_response[split_index:].lstrip()
+                        # update current message with the first part
                         await asyncio.to_thread(
                             self.slack_client.chat_update,
                             channel=ai_request.channel_id,
                             ts=message_ts,
-                            text=full_response[:3000]
+                            text=first_part
                         )
-                        full_response_to_return += full_response[:3000]
-                        #after we have sent the first 3000 characters, we can reset the full_response
-                        full_response = full_response[3000:]
-                        # create a new message for the residual response
-                        if len(full_response) > 0:
+                        full_response_to_return += first_part
+                        # prepare next message with the remainder
+                        full_response = remainder
+                        if full_response:
                             next_message = await asyncio.to_thread(
                                 self.slack_client.chat_postMessage,
                                 channel=ai_request.channel_id,
@@ -1498,7 +1503,7 @@ class TMAISlackAgent:
                                 text="...",
                                 unfurl_links=False,
                             )
-                        # Use the new message TS for any upcoming updates
+                        # new thread timestamp for further updates
                         message_ts = next_message["ts"]
                         buffer = ""
                     # Update the message when buffer is large enough. Reset buffer every 500 characters.
