@@ -873,6 +873,9 @@ class Captain:
                     elif first_function in SLACK_SCHEMAS:
                         platform = 'slack'
                         break
+                    elif first_function in POSTHOG_SCHEMAS:
+                        platform = 'posthog'
+                        break
                     # Add more platform detections as needed
         
         # Use the same platform-based prompt naming as in the plan method
