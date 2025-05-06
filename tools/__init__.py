@@ -9,6 +9,7 @@ from .tool_schema_slack import SLACK_SCHEMAS
 from .tool_schema_semantic_search import SEMANTIC_SEARCH_SCHEMAS
 from .tool_schema_website import WEBSITE_SCHEMAS
 from .tool_schema_gdrive import GDRIVE_SCHEMAS
+from .tool_schema_posthog import POSTHOG_SCHEMAS
 # Import tools implementation
 from .tools_declaration import (
     # Classes
@@ -37,6 +38,7 @@ __all__ = [
     'SEMANTIC_SEARCH_SCHEMAS',
     'WEBSITE_SCHEMAS',
     'GDRIVE_SCHEMAS',
+    'POSTHOG_SCHEMAS',
     # Tool classes
     'LinearTools',
     'SlackTools',

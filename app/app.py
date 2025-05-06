@@ -26,6 +26,13 @@ from ops_conversation_db import init_db, check_db_connection, cleanup_old_conver
 from rate_limiter import global_limiter
 from TMAI_slack_agent import TMAISlackAgent, AIRequest
 
+# Import Posthog scheduler (add this line)
+try:
+    from ops_posthog import run_scheduler
+except ImportError:
+    # Optional dependency - won't crash the app if missing
+    run_scheduler = None
+
 # Create logs directory if it doesn't exist
 logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
 os.makedirs(logs_dir, exist_ok=True)
@@ -53,6 +60,7 @@ logging.getLogger("agent").setLevel(logging.DEBUG)
 logging.getLogger("context_manager").setLevel(logging.INFO)
 logging.getLogger("slack_tools").setLevel(logging.DEBUG)
 logging.getLogger("linear_client").setLevel(logging.DEBUG)
+logging.getLogger("tools_declaration").setLevel(logging.DEBUG)
 
 # Load environment variables
 load_dotenv()
@@ -95,7 +103,9 @@ try:
         'linear_prompts.yaml', 
         'slack_prompt.yaml', 
         'github_prompt.yaml', 
-        'website_prompt.yaml'
+        'website_prompt.yaml',
+        'gdrive_prompts.yaml',
+        'posthog_prompts.yaml'
     ]
     
     logger.info(f"Loading prompts from {len(prompt_files)} files")
@@ -199,6 +209,7 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
                 channel_id = event.get("channel", "")
                 message_ts = event.get("ts", "")
                 thread_ts = event.get("thread_ts", message_ts)
+                logger.info(f"Thread TS: {thread_ts}")
                 
                 # Get files if any
                 files = event.get("files", [])
@@ -597,6 +608,18 @@ async def startup_event():
     # Start the background task
     asyncio.create_task(run_db_cleanup())
     logger.info("Scheduled database cleanup task started")
+    
+    # Start Posthog scheduler if available
+    if run_scheduler:
+        try:
+            # Start in a separate thread to not block FastAPI startup
+            import threading
+            threading.Thread(target=run_scheduler, daemon=True).start()
+            logger.info("Posthog scheduler started")
+        except Exception as e:
+            logger.error(f"Failed to start Posthog scheduler: {str(e)}")
+    else:
+        logger.info("Posthog integration not available or not configured")
 
 def check_rate_limit():
     """Check if the request is within rate limits."""

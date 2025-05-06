@@ -157,6 +157,67 @@ linear_tools:
         required_inputs:
           - query
 
+posthog_tools:
+  - category: "EXPLORE: Low-effort functions that are used to explore analytics data in PostHog. Use these functions first to get a basic understanding of available dashboards and metrics."
+    tools:
+      - name: get_dashboards
+        description: Get a list of all dashboards in the PostHog project. Use this to discover what analytics dashboards are available.
+        inputs: None
+        outputs: "Array of dashboard objects with basic metadata including ID, name, and description"
+        required_inputs: None
+
+  - category: "HIGH EFFORT: Advanced analytics functions for retrieving detailed data. Use these after you have identified the specific dashboards or insights you need data from."
+    tools:
+      - name: get_insight_data
+        description: Get data for a specific insight/chart. Use this when you need the raw data behind a specific visualization.
+        inputs:
+          insight_id: "The ID of the insight to get data for"
+          days: "Number of days of data to retrieve (default: 7, recommended values: 7, 14, 30, 90)"
+        outputs: "Detailed insight data including time series and metrics"
+        required_inputs:
+          - insight_id
+
+      - name: get_dashboard_data
+        description: Get all data for a dashboard including all insights. Use this for a comprehensive view of all metrics in a dashboard.
+        inputs:
+          dashboard_name: "The name of the dashboard to get data for (e.g., 'Marketing Dashboard', 'Product Dashboard')"
+          days: "Number of days of data to retrieve (default: 7, recommended values: 7, 14, 30, 90)"
+        outputs: "Complete dashboard data with all insights and metrics"
+        required_inputs:
+          - dashboard_name
+
+      - name: get_dashboard_by_name
+        description: Find a dashboard by its name. Use this when you know the exact name of the dashboard you want to retrieve.
+        inputs:
+          name: "The name of the dashboard to find (e.g., 'Marketing Dashboard', 'Product Dashboard')"
+        outputs: "Dashboard object with metadata"
+        required_inputs:
+          - name
+
+      - name: get_dashboard_by_id
+        description: Get a dashboard by its ID. Use this when you have the specific dashboard ID from a previous query.
+        inputs:
+          dashboard_id: "The ID of the dashboard to get"
+        outputs: "Dashboard object with detailed metadata"
+        required_inputs:
+          - dashboard_id
+          
+      - name: get_dashboard_screenshot
+        description: Get a screenshot of a dashboard as a PNG image and optionally upload it to Slack. If upload_to_slack is true, the image will be posted in the current conversation or specified Slack channel.
+        inputs:
+          dashboard_id: "The ID of the dashboard to screenshot"
+        outputs: "If upload_to_slack is true, returns Slack upload details including URL. Otherwise, binary PNG image data or path to saved file."
+        required_inputs:
+          - dashboard_id
+          
+      - name: get_insight_screenshot
+        description: Get a screenshot of a specific insight/chart as a PNG image and optionally upload it to Slack. If upload_to_slack is true, the image will be posted in the current conversation or specified Slack channel.
+        inputs:
+          insight_id: "The ID of the insight to screenshot"
+        outputs: "If upload_to_slack is true, returns Slack upload details including URL. Otherwise, binary PNG image data or path to saved file."
+        required_inputs:
+          - insight_id
+
 slack_tools:
   - category: "Slack communication tools"
     tools:

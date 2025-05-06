@@ -10,11 +10,27 @@ from typing import Dict, List, Optional, Any, Union, Tuple, Callable
 from dotenv import load_dotenv
 from functools import wraps
 import traceback
+import json
+import sys
+
+# Ensure ops_posthog is in the path
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ops_posthog"))
+from ops_posthog.posthog_client import PosthogClient
 
 load_dotenv()
 
-# Configure logger
+# Configure logger with a more explicit setup
 logger = logging.getLogger("tools_declaration")
+# Ensure the logger level is set to INFO or lower to see informational messages
+logger.setLevel(logging.INFO)
+
+# Add a console handler if none exists
+if not logger.handlers:
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    logger.addHandler(console_handler)
+
+logger.info("tools_declaration module loaded with explicit logging configuration")
 
 # Import Linear tools
 from ops_linear_db.linear_client import (
@@ -1348,6 +1364,74 @@ class SlackTools:
         if not self.client:
             raise ValueError("Slack client not initialized. Please provide valid tokens.")
     
+    async def upload_file(self, file: str) -> Dict:
+        """
+        Upload a file to Slack.
+        
+        Args:
+            file_path: Path to the file to upload
+            channel_id: Optional channel ID to upload the file to
+            title: Optional title for the file
+            thread_ts: Optional thread timestamp to upload the file to
+            
+        Returns:
+            Slack API response with file details
+        """
+        self._check_client()
+        
+
+        # Import context_manager
+        try:
+            from context_manager import context_manager
+        except Exception as e:
+            from app.context_manager import context_manager
+        
+        # Parse channel_id and thread_ts from the context_id
+        # Context ID format is "channel_id:thread_ts"
+        try:
+            parts = self._context_id.split(':', 1)
+            if len(parts) == 2:
+                channel_id, thread_ts = parts
+                logger.info(f"Retrieved channel_id={channel_id}, thread_ts={thread_ts} from context_id")
+
+            else:
+                # Attempt to get from context directly
+                context = context_manager.get_context(self._context_id)
+                if context and 'channel_id' in context and 'thread_ts' in context:
+                    channel_id = context['channel_id']
+                    thread_ts = context['thread_ts'].split('.')[0]
+                    logger.info(f"Retrieved channel_id={channel_id}, thread_ts={thread_ts} from context data")
+                else:
+                    logger.error(f"Invalid context_id format: {self._context_id}")
+                    return ["Error: Could not parse conversation context information"]
+        except Exception as e:
+            logger.error(f"Error retrieving conversation context: {str(e)}")
+            return [f"Error retrieving conversation context: {str(e)}"]
+        
+        # Upload the file
+        try:
+            from slack_sdk import WebClient
+            web_client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
+            response = web_client.files_upload_v2(channel=channel_id, file=file, thread_ts=thread_ts)
+            permalink = response.get("files", {})[0].get("permalink", "")
+            post_message = web_client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=permalink)
+            
+            logger.info(f"File uploaded successfully")
+            
+            # Convert SlackResponse to dict to make it JSON serializable
+            response_dict = {
+                "success": True,
+                "message": "File uploaded to Slack",
+                "file_id": response.get("file_id", ""),
+                "result": dict(post_message.data) if hasattr(post_message, "data") else {"text": "Message sent"}
+            }
+                        
+            return response_dict
+            
+        except Exception as e:
+            logger.error(f"Error uploading file to Slack: {str(e)}")
+            raise
+    
     def get_current_user(self, slack_display_name: str) -> dict:
         """Get information about a specific user by their Slack display name"""
         self._check_client()
@@ -1395,7 +1479,10 @@ class SlackTools:
             return ["Error: No conversation context available"]
         
         # Import context_manager
-        from context_manager import context_manager
+        try:
+            from context_manager import context_manager
+        except Exception as e:
+            from app.context_manager import context_manager
         
         # Parse channel_id and thread_ts from the context_id
         # Context ID format is "channel_id:thread_ts"
@@ -1448,12 +1535,341 @@ class GDriveTools:
     def get_drive_file_content(self, file_id: str) -> str:
         return self.gdrive_client.get_drive_file_content(file_id=file_id)
 
+class PosthogTools:
+    """Tools for interacting with PostHog analytics."""
     
-# Create singleton instances
+    def __init__(self):
+        """Initialize PostHog client."""
+        self.client = None
+        self._initialize_client()
+    
+    def _initialize_client(self):
+        """Initialize the PostHog client with API key from environment."""
+        try:
+            # Load from .env if not already loaded
+            load_dotenv()
+            
+            # Create the PostHog client
+            self.client = PosthogClient()
+            logging.info("PosthogTools initialized successfully")
+        except Exception as e:
+            logging.error(f"Error initializing PosthogTools: {str(e)}")
+            self.client = None
+    
+    def _check_client(self):
+        """Ensure the client is initialized."""
+        if not self.client:
+            self._initialize_client()
+            if not self.client:
+                raise ValueError("PostHog client is not initialized. Check your API credentials.")
+    
+    def get_dashboards(self) -> List[Dict]:
+        """Get a list of all dashboards in the PostHog project."""
+        self._check_client()
+        return self.client.get_dashboards()
+    
+    def get_dashboard_by_name(self, name: str) -> Dict:
+        """Find a dashboard by its name."""
+        self._check_client()
+        return self.client.get_dashboard_by_name(name)
+    
+    def get_dashboard_by_id(self, dashboard_id: str) -> Dict:
+        """Get a dashboard by its ID."""
+        self._check_client()
+        return self.client.get_dashboard_by_id(dashboard_id)
+    
+    def get_dashboard_items(self, dashboard_id: str) -> List[Dict]:
+        """Get all insights/charts in a dashboard."""
+        self._check_client()
+        return self.client.get_dashboard_items(dashboard_id)
+    
+    def get_insight_data(self, insight_id: str, days: int = 7) -> Dict:
+        """Get data for a specific insight/chart."""
+        self._check_client()
+        return self.client.get_insight_data(insight_id, days)
+    
+    def get_dashboard_data(self, dashboard_name: str, days: int = 7) -> Dict:
+        """Get all data for a dashboard including all insights."""
+        self._check_client()
+        return self.client.get_dashboard_data(dashboard_name, days)
+    
+    async def get_dashboard_screenshot(self, dashboard_id: str, context_id: str = None) -> Union[bytes, str, Dict]:
+        """
+        Get a screenshot of a dashboard as a PNG image and optionally upload to Slack.
+        
+        Args:
+            dashboard_id: The ID of the dashboard to screenshot
+            context_id: Optional context ID for the Slack conversation
+            
+        Returns:
+            If upload_to_slack is True, returns a dict with Slack upload details.
+            Otherwise, returns the binary image data.
+        """
+        self._check_client()
+        
+        # Get the screenshot from PostHog - this is a synchronous method
+        logger.info(f"Getting dashboard screenshot for dashboard_id {dashboard_id}")
+        screenshot_data = self.client.get_dashboard_screenshot(dashboard_id)
+        
+        # If screenshot failed, return None
+        if not screenshot_data:
+            logger.error("Failed to get dashboard screenshot")
+            return None
+        else:
+            logger.info(f"Screenshot data received: {len(screenshot_data) if isinstance(screenshot_data, bytes) else 'not bytes'} bytes")
+        
+        # Upload to Slack
+        try:
+            # Import SlackTools directly
+            from ops_slack.slack_tools import SlackClient
+            logger.info(f"Uploading screenshot to Slack")
+            
+            # Create a temporary file
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
+                temp_path = temp_file.name
+                # If screenshot_data is bytes, write directly
+                if isinstance(screenshot_data, bytes):
+                    temp_file.write(screenshot_data)
+                    logger.info(f"Wrote {len(screenshot_data)} bytes to temporary file")
+                # If it's a string path, read the file
+                elif isinstance(screenshot_data, str) and os.path.exists(screenshot_data):
+                    with open(screenshot_data, "rb") as src_file:
+                        data = src_file.read()
+                        temp_file.write(data)
+                        logger.info(f"Copied {len(data)} bytes from {screenshot_data} to temporary file")
+                else:
+                    logger.error(f"Invalid screenshot data type: {type(screenshot_data)}")
+                    return screenshot_data
+            
+            # Use SlackClient directly
+            slack_client = SlackClient(bot_token=os.environ.get("SLACK_BOT_TOKEN"))
+            
+            # Get current context ID from:
+            # 1. Function parameter (preferred)
+            # 2. Environment variable
+            # 3. Context manager
+            from context_manager import context_manager
+            
+            if not context_id:
+                context_id = os.environ.get("CURRENT_CONTEXT_ID")
+                logger.info(f"Using context_id from environment: {context_id}")
+            else:
+                logger.info(f"Using context_id provided to function: {context_id}")
+                
+            context = {}
+            
+            if context_id:
+                logger.info(f"Found context_id: {context_id}")
+                context = context_manager.get_context(context_id)
+                
+            # Extract channel_id and thread_ts
+            channel_id = None
+            thread_ts = None
+            
+            if context and 'channel_id' in context:
+                channel_id = context.get('channel_id')
+                thread_ts = context.get('thread_ts')
+                logger.info(f"Retrieved from context: channel_id={channel_id}, thread_ts={thread_ts}")
+            elif context_id and ':' in context_id:
+                parts = context_id.split(':', 1)
+                if len(parts) == 2:
+                    channel_id, thread_ts = parts
+                    logger.info(f"Parsed from context_id: channel_id={channel_id}, thread_ts={thread_ts}")
+                    
+            if not channel_id:
+                logger.error("No channel_id found in context")
+                raise ValueError("No channel_id found in context")
+                
+            # Upload the file
+            logger.info(f"Uploading file {temp_path} to channel {channel_id} with thread_ts {thread_ts}")
+            from slack_sdk import WebClient
+            web_client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
+            response = web_client.files_upload_v2(
+                channel=channel_id,
+                file=temp_path,
+                thread_ts=thread_ts,
+            )
+            permalink = response.get("files", {})[0].get("permalink", "")
+            post_message = web_client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=permalink)
+            
+            # Delete the temporary file
+            try:
+                os.unlink(temp_path)
+                logger.info(f"Deleted temporary file {temp_path}")
+            except Exception as e:
+                logger.warning(f"Failed to delete temporary file {temp_path}: {str(e)}")
+                
+            # Convert SlackResponse to dict to make it JSON serializable
+            response_dict = {
+                "success": True,
+                "message": "Insight screenshot uploaded to Slack",
+                "file_id": response.get("file_id", ""),
+                "result": dict(post_message.data) if hasattr(post_message, "data") else {"text": "Message sent"}
+            }
+                        
+            return response_dict
+                
+        except Exception as e:
+            logger.error(f"Error uploading dashboard screenshot to Slack: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            # Return the original result if upload fails
+            return screenshot_data
+    
+    async def get_insight_screenshot(self, insight_id: str, context_id: str = None) -> Union[bytes, str, Dict]:
+        """
+        Get a screenshot of an insight as a PNG image and optionally upload to Slack.
+        
+        Args:
+            insight_id: The ID of the insight to screenshot
+            context_id: Optional context ID for the Slack conversation
+            
+        Returns:
+            If upload_to_slack is True, returns a dict with Slack upload details.
+            Otherwise, returns the binary image data.
+        """
+        self._check_client()
+        
+        # Get the screenshot from PostHog - this is a synchronous method
+        logger.info(f"Getting insight screenshot for insight_id {insight_id}")
+        screenshot_data = self.client.get_insight_screenshot(insight_id)
+        
+        # If screenshot failed, return None
+        if not screenshot_data:
+            logger.error("Failed to get insight screenshot")
+            return None
+        else:
+            logger.info(f"Screenshot data received: {len(screenshot_data) if isinstance(screenshot_data, bytes) else 'not bytes'} bytes")
+        
+        # Upload to Slack
+        try:
+            # Import SlackTools directly
+            from ops_slack.slack_tools import SlackClient
+            logger.info(f"Uploading screenshot to Slack")
+            
+            # Create a temporary file
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
+                temp_path = temp_file.name
+                # If screenshot_data is bytes, write directly
+                if isinstance(screenshot_data, bytes):
+                    temp_file.write(screenshot_data)
+                    logger.info(f"Wrote {len(screenshot_data)} bytes to temporary file")
+                # If it's a string path, read the file
+                elif isinstance(screenshot_data, str) and os.path.exists(screenshot_data):
+                    with open(screenshot_data, "rb") as src_file:
+                        data = src_file.read()
+                        temp_file.write(data)
+                        logger.info(f"Copied {len(data)} bytes from {screenshot_data} to temporary file")
+                else:
+                    logger.error(f"Invalid screenshot data type: {type(screenshot_data)}")
+                    return screenshot_data
+            
+            # Use SlackClient directly
+            slack_client = SlackClient(bot_token=os.environ.get("SLACK_BOT_TOKEN"))
+            
+            # Get current context ID from:
+            # 1. Function parameter (preferred)
+            # 2. Environment variable
+            # 3. Context manager
+            from context_manager import context_manager
+            
+            if not context_id:
+                context_id = os.environ.get("CURRENT_CONTEXT_ID")
+                logger.info(f"Using context_id from environment: {context_id}")
+            else:
+                logger.info(f"Using context_id provided to function: {context_id}")
+                
+            context = {}
+            
+            if context_id:
+                logger.info(f"Found context_id: {context_id}")
+                context = context_manager.get_context(context_id)
+                
+            # Extract channel_id and thread_ts
+            channel_id = None
+            thread_ts = None
+            
+            if context and 'channel_id' in context:
+                channel_id = context.get('channel_id')
+                thread_ts = context.get('thread_ts')
+                logger.info(f"Retrieved from context: channel_id={channel_id}, thread_ts={thread_ts}")
+            elif context_id and ':' in context_id:
+                parts = context_id.split(':', 1)
+                if len(parts) == 2:
+                    channel_id, thread_ts = parts
+                    logger.info(f"Parsed from context_id: channel_id={channel_id}, thread_ts={thread_ts}")
+                    
+            if not channel_id:
+                logger.error("No channel_id found in context")
+                raise ValueError("No channel_id found in context")
+                
+            # Upload the file
+            logger.info(f"Uploading file {temp_path} to channel {channel_id} with thread_ts {thread_ts}")
+            from slack_sdk import WebClient
+            web_client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
+            response = web_client.files_upload_v2(
+                channel=channel_id,
+                file=temp_path,
+                thread_ts=thread_ts,
+                title=f"Insight: {insight_id}"
+            )
+            permalink = response.get("files", {})[0].get("permalink", "")
+            post_message = web_client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=permalink)
+            
+            # Delete the temporary file
+            try:
+                os.unlink(temp_path)
+                logger.info(f"Deleted temporary file {temp_path}")
+            except Exception as e:
+                logger.warning(f"Failed to delete temporary file {temp_path}: {str(e)}")
+                
+            # Convert SlackResponse to dict to make it JSON serializable
+            response_dict = {
+                "success": True,
+                "message": "Insight screenshot uploaded to Slack",
+                "file_id": response.get("file_id", ""),
+                "result": dict(post_message.data) if hasattr(post_message, "data") else {"text": "Message sent"}
+            }
+                        
+            return response_dict
+                
+        except Exception as e:
+            logger.error(f"Error uploading insight screenshot to Slack: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            # Return the original result if upload fails
+            return screenshot_data
+    
+    def save_dashboard_screenshots(self, dashboard_name: str, output_dir: str) -> List[str]:
+        """Save screenshots of a dashboard and all its insights to a directory."""
+        self._check_client()
+        return self.client.save_dashboard_screenshots(dashboard_name, output_dir)
+    
+    def generate_daily_report(self, dashboard_name: str) -> str:
+        """Generate a daily analytics report for a dashboard."""
+        self._check_client()
+        return self.client.generate_daily_report(dashboard_name)
+    
+    def generate_weekly_report(self, dashboard_names: List[str]) -> str:
+        """Generate a comprehensive weekly analytics report for one or more dashboards."""
+        self._check_client()
+        # Convert single dashboard name to list if needed
+        if isinstance(dashboard_names, str):
+            dashboard_names = [dashboard_names]
+        return self.client.generate_weekly_report(dashboard_names)
+    
+    def generate_ai_insights(self, dashboard_name: str, days: int = 7, insight_type: str = "daily") -> str:
+        """Generate AI-powered insights for a dashboard."""
+        self._check_client()
+        return self.client.generate_ai_insights(dashboard_name, days, insight_type)
+
+# Create instances of the tool classes for importing
 linear_tools = LinearTools()
 slack_tools = SlackTools()
 website_tools = WebsiteTools()
 gdrive_tools = GDriveTools()
+posthog_tools = PosthogTools()
+
 # Export all tools
 __all__ = [
     # Classes
@@ -1479,4 +1895,5 @@ __all__ = [
     'slack_tools',
     'website_tools',
     'gdrive_tools',
+    'posthog_tools',
 ] 

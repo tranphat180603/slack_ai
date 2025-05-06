@@ -8,7 +8,7 @@ from typing import Dict, List, Any, Optional, Union, Iterator
 import re
 
 from llm.openai_client import OpenaiClient, CancellableOpenAIClient, CancellationError
-from tools import LINEAR_SCHEMAS, SLACK_SCHEMAS, SEMANTIC_SEARCH_SCHEMAS, WEBSITE_SCHEMAS, GDRIVE_SCHEMAS
+from tools import LINEAR_SCHEMAS, SLACK_SCHEMAS, SEMANTIC_SEARCH_SCHEMAS, WEBSITE_SCHEMAS, GDRIVE_SCHEMAS, POSTHOG_SCHEMAS
 
 # Configure logger
 logger = logging.getLogger("agent")
@@ -532,6 +532,7 @@ class Commander:
                     "description": f"Waiting for approval to {func_name}"
                 }
                 needs_approval = True
+            
         
         # Prepare prompt variables
         prompt_vars = {
@@ -744,6 +745,8 @@ class Captain:
             prompt_vars["website_tools"] = tools_text
         elif platform == "gdrive":
             prompt_vars["gdrive_tools"] = tools_text
+        elif platform == "posthog":
+            prompt_vars["posthog_tools"] = tools_text
         else:
             # Fallback to a generic name
             prompt_vars["tools"] = tools_text
@@ -1008,7 +1011,7 @@ class Captain:
                         # Handle inputs based on type
                         inputs = tool.get('inputs')
                         if inputs is None:
-                            tools_text += "  (No inputs defined)\n"
+                            tools_text += "  (No inputs defined)\n" 
                             logger.warning(f"Tool {tool_name} has no 'inputs' field")
                         elif isinstance(inputs, dict):
                             # Inputs is a dictionary, iterate through key-value pairs
@@ -1135,6 +1138,11 @@ class Soldier:
             platform = "gdrive"
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(f"[Soldier] {function_name} is a Google Drive tool")
+        elif function_name in POSTHOG_SCHEMAS:
+            tool_schema = POSTHOG_SCHEMAS[function_name]
+            platform = "posthog"
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"[Soldier] {function_name} is a PostHog tool")
         if not tool_schema:
             logger.error(f"No schema found for function: {function_name}")
             return {
@@ -1194,7 +1202,7 @@ class Soldier:
                 }
             
             # Import tool implementations here to avoid circular imports
-            from tools.tools_declaration import linear_tools, slack_tools, website_tools, gdrive_tools
+            from tools.tools_declaration import linear_tools, slack_tools, website_tools, gdrive_tools, posthog_tools
             
             # Map function name to implementation
             tool_implementations = {
@@ -1227,6 +1235,15 @@ class Soldier:
                 # Google Drive tools
                 "search_drive_files": gdrive_tools.search_drive_files,
                 "get_drive_file_content": gdrive_tools.get_drive_file_content,
+                
+                # PostHog tools
+                "get_dashboards": posthog_tools.get_dashboards,
+                "get_dashboard_by_name": posthog_tools.get_dashboard_by_name,
+                "get_dashboard_by_id": posthog_tools.get_dashboard_by_id,
+                "get_insight_data": posthog_tools.get_insight_data,
+                "get_dashboard_data": posthog_tools.get_dashboard_data,
+                "get_dashboard_screenshot": posthog_tools.get_dashboard_screenshot,
+                "get_insight_screenshot": posthog_tools.get_insight_screenshot,
             }
             
             # Get the tool implementation
@@ -1270,7 +1287,12 @@ class Soldier:
                     logger.info(f"Set context ID {self.context_id} on slack_tools for {function_name}")
                 
                 # Handle async functions
-                if function_name in ["search_channel_history", "get_conversation_context"]:
+                if function_name in ["search_channel_history", "get_conversation_context", "get_dashboard_screenshot", "get_insight_screenshot"]:
+                    # For screenshot functions, pass the context_id parameter
+                    if function_name in ["get_dashboard_screenshot", "get_insight_screenshot"]:
+                        params["context_id"] = self.context_id
+                        logger.info(f"Added context ID {self.context_id} to params for {function_name}")
+                    
                     result = await tool_func(**params)
                 else:
                     result = tool_func(**params)
@@ -1283,7 +1305,7 @@ class Soldier:
                 api_call_tracker.track_call("Soldier", f"execute_{function_name}", execution_time)
                 
                 # Log the execution result (summary)
-                if logger.isEnabledFor(logging.DEBUG):
+                if logger.isEnabledFor(logging.DEBUG) and function_name !="get_dashboard_screenshot":
                     logger.debug(f"[Soldier] Execution result for {function_name}: {result}")
                 
                 return {

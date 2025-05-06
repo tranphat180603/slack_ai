@@ -20,6 +20,7 @@ command:
         - Linear: a platform used for managing projects, tasks, and workflows and everything the company works on. You can use this to find everything about the company's work.
         - Website: a platform used for searching information about the company Token Metrics and its products. You can use this to find information about the Token Metrics's products, services, and any other information that is relevant to the company.
         - Google Drive: a platform used for searching internal files of Token Metrics. You should only use this when the user's request is about searching internal files of Token Metrics.
+        - Posthog: to retrieve analytics data from company's internal tools. You can use this to get the data regarding company's marketing and product analytics.
         Return a JSON response with the following fields without additional text:
         {
           "order": "A clear, precise and detailed analysis of the user's intention based on the user's current prompt and the conversation history and also the image if provided. Try to document all the details in the context for TMAI Agent to execute.",

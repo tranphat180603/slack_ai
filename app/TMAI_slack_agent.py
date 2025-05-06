@@ -25,6 +25,7 @@ from ops_conversation_db.conversation_db import get_db, load_conversation_from_d
 from tools.tool_schema_linear import LINEAR_SCHEMAS
 from tools.tool_schema_slack import SLACK_SCHEMAS  
 from tools.tool_schema_semantic_search import SEMANTIC_SEARCH_SCHEMAS
+from tools.tool_schema_posthog import POSTHOG_SCHEMAS
 from rate_limiter import global_limiter, slack_limiter, linear_limiter, openai_limiter
 from ops_linear_db.linear_client import LinearClient
 from agent import Commander, Captain, Soldier, get_api_call_tracker, log_api_call_report
@@ -47,6 +48,9 @@ TOOLS_CONFIG = {
     },
     "gdrive": {
         "enabled": os.getenv("GOOGLE_CLIENT_ID") is not None
+    },
+    "posthog": {
+        "enabled": os.getenv("POSTHOG_API_KEY") is not None and os.getenv("POSTHOG_PROJECT_ID") is not None
     }
 }
 

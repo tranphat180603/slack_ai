@@ -691,7 +691,10 @@ class SlackClient:
                 "search_params": search_params,
                 "count": 0,
                 "error": str(e.response['error'])
+                
             }
+        
+
 
 if __name__ == "__main__":
     import os
@@ -708,25 +711,25 @@ if __name__ == "__main__":
         # Channel and thread to retrieve conversation from - in a real application, 
         # these would be determined from the current chat session
         channel_id = "D08KJP0UG30"
-        thread_ts = "1744954542.920769"
+        thread_ts = "1746453674.294249"
         
-        print(f"Testing conversation context retrieval")
+        print(f"testing image upload")
         print("-" * 60)
         
-        # Example: Get conversation context with only max_messages
-        # In the actual implementation, the agent would pass channel_id and thread_ts 
-        # from the current context automatically
-        print("Example: Get conversation context with only max_messages parameter")
-        conversation = await slack_client.get_conversation_context(
-            channel_id=channel_id,  # In production, this would come from current context
-            thread_ts=thread_ts,    # In production, this would come from current context
-            max_messages=100        # This is the only parameter that would be passed by the LLM/user
+        webclient = WebClient(token=os.getenv("SLACK_BOT_TOKEN"))
+        response = webclient.files_upload_v2(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            file="ops_posthog/screenshots/Web_Traffic_2085761.png",
         )
-        
-        print(f"Retrieved {len(conversation)} messages from conversation")
-        # Display the messages
-        for msg in conversation:
-            print(msg)
+
+        permalink = response.get("files", {})[0].get("permalink", "")
+        post_message = webclient.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text=permalink
+        )
+        print(post_message)
         
         print("\nDone!")
     
