@@ -3,7 +3,7 @@
 Initialize conversation database tables
 """
 
-from .conversation_db import init_db, check_db_connection
+from ops_conversation_db.conversation_db import init_db, check_db_connection
 import logging
 import sys
 import time

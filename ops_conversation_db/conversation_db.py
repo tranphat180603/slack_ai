@@ -14,6 +14,7 @@ from datetime import datetime
 import time
 import argparse
 import sys
+from sqlalchemy import text
 
 from .conversation_models import Base, Conversation, Message
 
@@ -66,7 +67,7 @@ def check_db_connection() -> bool:
     """Check if database connection is working"""
     try:
         with get_db() as db:
-            db.execute("SELECT 1")
+            db.execute(text("SELECT 1"))
         return True
     except Exception as e:
         logger.error(f"Database connection check failed: {str(e)}")
