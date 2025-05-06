@@ -12,6 +12,8 @@ import logging
 from dotenv import load_dotenv
 from datetime import datetime
 import time
+import argparse
+import sys
 
 from .conversation_models import Base, Conversation, Message
 
@@ -309,40 +311,53 @@ def view_conversations(limit: int = 2, channel_id: str = None, thread_ts: str = 
 
 # Allow running this file directly to view conversations
 if __name__ == "__main__":
-    import sys
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
     
-    # Simple command line argument parsing
-    channel = None
-    thread = None
-    cleanup = False
-    cleanup_hours = 24
+    parser = argparse.ArgumentParser(description='Conversation database operations')
+    parser.add_argument('--cleanup', type=int, help='Clean up conversations older than N hours')
+    parser.add_argument('--view', action='store_true', help='View recent conversations')
+    parser.add_argument('--channel', type=str, help='Channel ID for viewing specific conversations')
+    parser.add_argument('--thread', type=str, help='Thread TS for viewing specific conversation')
+    parser.add_argument('--limit', type=int, default=5, help='Limit for number of conversations to view')
+    parser.add_argument('--init', action='store_true', help='Initialize database tables')
     
-    # Check for arguments
-    if len(sys.argv) > 1:
-        for arg in sys.argv[1:]:
-            if arg.startswith("--channel="):
-                channel = arg.split("=")[1]
-            elif arg.startswith("--thread="):
-                thread = arg.split("=")[1]
-            elif arg.startswith("--cleanup"):
-                cleanup = True
-                if "=" in arg:
-                    try:
-                        cleanup_hours = int(arg.split("=")[1])
-                    except ValueError:
-                        print(f"Invalid hours value: {arg.split('=')[1]}, using default 24 hours")
-            elif arg.startswith("--help"):
-                print("Usage: python database.py [--channel=CHANNEL_ID] [--thread=THREAD_TS] [--cleanup[=HOURS]]")
-                print("  --channel=CHANNEL_ID   Filter conversations by channel ID")
-                print("  --thread=THREAD_TS     Filter conversations by thread timestamp")
-                print("  --cleanup[=HOURS]      Clean up conversations older than specified hours (default: 24)")
-                print("  --help                 Show this help message")
-                sys.exit(0)
+    args = parser.parse_args()
     
-    # Run cleanup if requested
-    if cleanup:
-        removed = cleanup_old_conversations(hours=cleanup_hours)
-        print(f"Cleaned up {removed} conversations older than {cleanup_hours} hours")
+    # Always try to initialize the database to ensure tables exist
+    try:
+        logger.info("Ensuring database tables are initialized...")
+        init_db()
+        logger.info("Database tables ready")
+    except Exception as e:
+        logger.error(f"Failed to initialize database tables: {e}")
+        sys.exit(1)
+    
+    if args.cleanup:
+        try:
+            count = cleanup_old_conversations(hours=args.cleanup)
+            print(f"Cleaned up {count} conversations older than {args.cleanup} hours")
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+            sys.exit(1)
+    
+    elif args.view:
+        try:
+            view_conversations(
+                limit=args.limit,
+                channel_id=args.channel,
+                thread_ts=args.thread
+            )
+        except Exception as e:
+            logger.error(f"Error viewing conversations: {e}")
+            sys.exit(1)
+    
+    elif args.init:
+        # We've already initialized above
+        print("Database tables initialized successfully")
+    
     else:
-        # Otherwise view conversations
-        view_conversations(channel_id=channel, thread_ts=thread) 
+        parser.print_help() 
