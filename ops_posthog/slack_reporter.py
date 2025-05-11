@@ -126,14 +126,14 @@ class SlackReporter:
             # Initialize PosthogClient
             posthog_client = PosthogClient()
             
-            channel_id = "C08RC85LNJG"
-            print(f"Slack channel ID: {channel_id}")
+            # channel_id = "C08RC85LNJG"
+            # print(f"Slack channel ID: {channel_id}")
             # Generate report
             channels = ["C07C44USZKR", "C07D7F5531N", "C07F3SD76EA"] #["product", "marketing", "tmai-api"]
             print(f"Generating weekly report for {dashboard_names}")
             for dashboard_name, channel in zip(dashboard_names, channels):
                 print(f"Processing {dashboard_name}")
-                # channel_id = self.get_channel_id(channel)
+                channel_id = self.get_channel_id(channel)
                 # Generate report
                 report = posthog_client.generate_weekly_report([dashboard_name], slack_channel_id=channel_id)
 
