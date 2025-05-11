@@ -628,7 +628,7 @@ Please provide a comprehensive weekly analysis with the following sections:
 2. Recommendations - 3 data-driven, actionable recommendations
 
 General rule:
-- Get straight to the point without any heading. Make sure the entire report does not exceed 386 words.
+- Get straight to the point without any heading. Make sure the entire report does not exceed 280 words. Make it condensed like a X post (Twitter tweet).
 - Focus on extracting valuable insights rather than just describing numbers.
 - Pay attention to the time period (today's date and current week) of the data you are analyzing. If the current week's not finish, focus on the previous weeks' data. Only give comparison on weeks that are complete (have full week's data).
 - Only give a brief update of the current week's data. And it should not be compared with the previous weeks' data since it's not complete yet.
