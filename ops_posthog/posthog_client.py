@@ -633,7 +633,7 @@ General rule:
 - Pay attention to the time period (today's date and current week) of the data you are analyzing. If the current week's not finish, focus on the previous weeks' data. Only give comparison on weeks that are complete (have full week's data).
 - Only give a brief update of the current week's data. And it should not be compared with the previous weeks' data since it's not complete yet.
 - For each insight, if an image URL is available in 'Insight images', include it directly under its analysis using the Slack link format: <IMAGE_URL|View {Insight Name} Image>. Do NOT use Markdown [Text](URL) format. If an image URL is not related to the insight, just ignore it.
-- Remember, if a week is not complete, compare it with completd weeks data makes no sense at all. Just give a brief update of the current week's data.
+- Remember, if a week is not complete, compare it with completd weeks data makes no sense at all. Just skip it entirely, focus on the complete weeks.
 - Add 2 new lines between each section.
 
 IMPORTANT: Creatively use these Slack's supported markdown as much as you can to make the report more readable. But do not use other markdown formatting that isn't listed here:
