@@ -68,7 +68,9 @@ class SlackReporter:
                 channel=channel_id,
                 text=text,
                 thread_ts=thread_ts,
-                unfurl_links=False
+                unfurl_links=False,
+                unfurl_media=False,
+                mrkdwn=True
             )
             logger.info(f"Message sent to channel {channel_id}")
             return response
@@ -124,12 +126,18 @@ class SlackReporter:
             # Initialize PosthogClient
             posthog_client = PosthogClient()
             
+            channel_id = "C08RC85LNJG"
+            print(f"Slack channel ID: {channel_id}")
             # Generate report
-            
-            for dashboard_name in dashboard_names:
-                channel_id = self.get_channel_id(dashboard_name)
+            channels = ["C07C44USZKR", "C07D7F5531N", "C07F3SD76EA"] #["product", "marketing", "tmai-api"]
+            print(f"Generating weekly report for {dashboard_names}")
+            for dashboard_name, channel in zip(dashboard_names, channels):
+                print(f"Processing {dashboard_name}")
+                # channel_id = self.get_channel_id(channel)
                 # Generate report
-                report = posthog_client.generate_weekly_report(dashboard_names)
+                report = posthog_client.generate_weekly_report([dashboard_name], slack_channel_id=channel_id)
+
+                # print(f"Sending weekly report to {channel_id} \n \n")
                 
                 # Only send once per channel
                 await self.send_message(channel_id, report)
@@ -145,7 +153,8 @@ if __name__ == "__main__":
     # Create an async function to run
     async def main():
         reporter = SlackReporter(os.getenv("SLACK_BOT_TOKEN"))
-        await reporter.send_weekly_report(["Product Dashboard", "Marketing Dashboard"])
+        await reporter.send_weekly_report(["Marketing Dashboard"])
+        # await reporter.send_weekly_report(["Product Dashboard", "Marketing Dashboard", "Data API Dashboard"])
     
     # Run the async function
     asyncio.run(main())

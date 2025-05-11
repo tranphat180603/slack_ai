@@ -1,7 +1,7 @@
 import os
 import asyncio
 import logging
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 import schedule
 from typing import List, Dict, Any, Optional
 
@@ -19,8 +19,9 @@ class PosthogScheduler:
         self.slack_reporter = None
         self.running = False
         self.dashboards = {
-            "Marketing": os.environ.get("MARKETING_DASHBOARD_NAME", "Marketing Dashboard"),
-            "Product": os.environ.get("PRODUCT_DASHBOARD_NAME", "Product Dashboard")
+            "Marketing": "Marketing Dashboard",
+            "Product": "Product Dashboard",
+            "Data Analytics": "Data API Dashboard"
         }
         
         logger.info("PosthogScheduler initialized")
@@ -86,18 +87,19 @@ class PosthogScheduler:
             await self.send_daily_alert(dashboard_name)
     
     def schedule_tasks(self):
-        """Schedule the daily and weekly tasks."""
-        # Schedule daily alerts at 9:00 AM
-        schedule.every().day.at("09:00").do(
-            lambda: asyncio.run(self.run_daily_alerts())
-        )
+        """Schedule the weekly tasks."""
         
-        # Schedule weekly report on Friday at 4:00 PM
-        schedule.every().friday.at("16:00").do(
+        # Convert UTC time to local time for scheduling
+        now = datetime.now()
+        now_utc = datetime.now(timezone.utc)
+        local_offset = (now - now_utc).total_seconds() / 3600
+        local_time = time(0, 0).replace(hour=(0 - int(local_offset)) % 24)
+        
+        schedule.every().monday.at(local_time.strftime("%H:%M")).do(
             lambda: asyncio.run(self.send_weekly_report())
         )
         
-        logger.info("Scheduled daily alerts (9:00 AM) and weekly report (Friday 4:00 PM)")
+        logger.info(f"Scheduled weekly report (Monday 00:00 UTC, local time: {local_time.strftime('%H:%M')})")
     
     def start(self):
         """Start the scheduler."""
