@@ -19,8 +19,8 @@ class PosthogScheduler:
         self.slack_reporter = None
         self.running = False
         self.dashboards = {
-            "Marketing": "Marketing Dashboard",
             "Product": "Product Dashboard",
+            "Marketing": "Marketing Dashboard",
             "Data Analytics": "Data API Dashboard"
         }
         
@@ -89,10 +89,12 @@ class PosthogScheduler:
     def schedule_tasks(self):
         """Schedule the weekly tasks."""
         
-        # Convert UTC time to local time for scheduling
-        now = datetime.now()
-        now_utc = datetime.now(timezone.utc)
-        local_offset = (now - now_utc).total_seconds() / 3600
+        # Get the current time with local timezone
+        now = datetime.now().astimezone()
+        
+        # Get offset from UTC directly from the timezone-aware datetime
+        local_offset = now.utcoffset().total_seconds() / 3600
+        
         local_time = time(0, 0).replace(hour=(0 - int(local_offset)) % 24)
         
         schedule.every().monday.at(local_time.strftime("%H:%M")).do(

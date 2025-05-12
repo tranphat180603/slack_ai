@@ -31,25 +31,10 @@ class SlackReporter:
         
         # Channel mappings
         self.channel_map = {
-            "Marketing": os.environ.get("MARKETING_CHANNEL_ID", "marketing"),
-            "Product": os.environ.get("PRODUCT_CHANNEL_ID", "product")
+            "Marketing Dashboard": os.environ.get("MARKETING_CHANNEL_ID", "C07D7F5531N"),
+            "Product Dashboard": os.environ.get("PRODUCT_CHANNEL_ID", "C07C44USZKR"),
+            "Data API Dashboard": os.environ.get("DATA_API_CHANNEL_ID", "C07F3SD76EA")
         }
-    
-    def get_channel_id(self, dashboard_name: str) -> str:
-        """
-        Get the appropriate Slack channel ID for a given dashboard.
-        
-        Args:
-            dashboard_name: Name of the dashboard
-            
-        Returns:
-            Slack channel ID or name
-        """
-        # Remove "Dashboard" suffix if present for mapping lookup
-        clean_name = dashboard_name.replace(" Dashboard", "")
-        
-        # Return the mapped channel or default to the dashboard name as channel
-        return self.channel_map.get(clean_name, dashboard_name.lower())
     
     async def send_message(self, channel_id: str, text: str, thread_ts: Optional[str] = None) -> Dict:
         """
@@ -100,8 +85,12 @@ class SlackReporter:
                 logger.info(f"No significant changes for {dashboard_name}, skipping alert")
                 return True
             
-            # Get the appropriate channel
-            channel_id = self.get_channel_id(dashboard_name)
+            # Get the appropriate channel from the channel map
+            channel_id = self.channel_map.get(dashboard_name)
+            if not channel_id:
+                logger.warning(f"No channel mapping found for {dashboard_name}, using fallback")
+                # Fall back to dashboard name as channel name
+                channel_id = dashboard_name.lower().replace(" dashboard", "")
             
             # Send the report
             await self.send_message(channel_id, report)
@@ -126,35 +115,35 @@ class SlackReporter:
             # Initialize PosthogClient
             posthog_client = PosthogClient()
             
-            # channel_id = "C08RC85LNJG"
-            # print(f"Slack channel ID: {channel_id}")
-            # Generate report
-            channels = ["C07C44USZKR", "C07D7F5531N", "C07F3SD76EA"] #["product", "marketing", "tmai-api"]
-            print(f"Generating weekly report for {dashboard_names}")
-            for dashboard_name, channel in zip(dashboard_names, channels):
-                print(f"Processing {dashboard_name}")
-                channel_id = self.get_channel_id(channel)
-                # Generate report
-                report = posthog_client.generate_weekly_report([dashboard_name], slack_channel_id=channel_id)
-
-                # print(f"Sending weekly report to {channel_id} \n \n")
+            # Process each dashboard and send to appropriate channel
+            for dashboard_name in dashboard_names:
+                # Get channel ID from mapping
+                channel_id = self.channel_map.get(dashboard_name)
                 
-                # Only send once per channel
+                if not channel_id:
+                    logger.warning(f"No channel mapping found for {dashboard_name}, skipping report")
+                    continue
+                
+                # Generate report for this dashboard
+                report = posthog_client.generate_weekly_report([dashboard_name], slack_channel_id=channel_id)
+                
+                logger.info(f"Sending weekly report for {dashboard_name} to channel {channel_id}")
+                
+                # Send the report to the appropriate channel
                 await self.send_message(channel_id, report)
-                logger.info(f"Weekly report sent to {channel_id}")
+                logger.info(f"Weekly report for {dashboard_name} sent to {channel_id}")
             
             return True
             
         except Exception as e:
             logger.error(f"Error sending weekly report: {str(e)}")
-            return False 
+            return False
         
 if __name__ == "__main__":
     # Create an async function to run
     async def main():
         reporter = SlackReporter(os.getenv("SLACK_BOT_TOKEN"))
-        await reporter.send_weekly_report(["Marketing Dashboard"])
-        # await reporter.send_weekly_report(["Product Dashboard", "Marketing Dashboard", "Data API Dashboard"])
+        await reporter.send_weekly_report(["Product Dashboard", "Marketing Dashboard", "Data API Dashboard"])
     
     # Run the async function
     asyncio.run(main())
