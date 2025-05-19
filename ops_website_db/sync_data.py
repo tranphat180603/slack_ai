@@ -116,21 +116,21 @@ class WebsiteCrawler:
             "type": "main",
             "exclude_paths": ["/app/", "/login/", "/register/", "/reset-password/"],
             "max_depth": 2,
-            "limit": 50
+            "limit": 20
         },
         "research": {
             "url": "https://research.tokenmetrics.com",
             "type": "research",
             "exclude_paths": ["/wp-admin/", "/wp-login.php", "/feed/"],
             "max_depth": 2,
-            "limit": 50
+            "limit": 20
         },
         "blog": {
             "url": "https://newsletter.tokenmetrics.com",
             "type": "blog",
             "exclude_paths": ["/wp-admin/", "/wp-login.php", "/feed/"],
             "max_depth": 2,
-            "limit": 50
+            "limit": 20
         }
     }
     
