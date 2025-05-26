@@ -522,7 +522,7 @@ class PosthogClient:
                 return "Error: OpenAI API key not configured"
             
             # Use OpenAI for analysis
-            ai_client = OpenaiClient(openai_api_key, model="gpt-4.1-mini-2025-04-14")
+            ai_client = OpenaiClient(openai_api_key, model="o3")
             
             # Generate insights with a system prompt that guides the AI
             system_prompt = """You are TMAI Agent, a helpful assistant operate within the company called Token Metrics, a company works in the field of crypto and AI.
@@ -536,13 +536,9 @@ Write a concise and straight to the point report. Don't include any fluff. Don't
             print(f"User Prompt: {prompt}")
             full_response = ""
             # Get AI response
-            insights = ai_client.response(prompt=prompt, system_prompt=system_prompt, stream=True)
-            for chunk in insights:
-                if chunk.type == "response.output_text.delta":
-                    print(chunk.delta, end="", flush=True)
-                    full_response += chunk.delta
-            
-            print("\n \n")
+            insights = ai_client.response_reasoning(prompt=system_prompt + "\n\n" + prompt, reasoning_effort="medium")
+            full_response = insights
+            print(f"Full Response: {full_response}")
             return full_response
         
         except Exception as e:
@@ -685,7 +681,7 @@ AGAIN: DO NOT USE OTHER MARKDOWN FORMATTING THAT IS NOT LISTED HERE.
         if len(dashboard_names) > 1:
             # Initialize OpenAI client for cross-dashboard analysis
             openai_api_key = os.environ.get("OPENAI_API_KEY")
-            ai_client = OpenaiClient(openai_api_key, model="gpt-4.1-2025-04-14")
+            ai_client = OpenaiClient(openai_api_key, model="o3")
             
             # Generate cross-dashboard insights
             system_prompt = """You are TMAI Agent, a helpful assistant operate within the company called Token Metrics, a company works in the field of crypto and AI.
@@ -701,7 +697,7 @@ Individual dashboard analyses:
 
 Present your analysis in a clear, concise format suitable for executives and stakeholders.
 """
-            cross_analysis = ai_client.response(prompt=cross_dashboard_prompt, system_prompt=system_prompt)
+            cross_analysis = ai_client.response_reasoning(prompt=system_prompt + "\n\n" + cross_dashboard_prompt, reasoning_effort="medium")
             
             # Add the cross-analysis to the report
             final_report = f"# Weekly Cross-Dashboard Analysis\n\n{cross_analysis}\n\n---\n\n{combined_insights}"

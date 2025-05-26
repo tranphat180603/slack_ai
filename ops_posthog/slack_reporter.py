@@ -33,7 +33,7 @@ class SlackReporter:
         self.channel_map = {
             "Marketing Dashboard": os.environ.get("MARKETING_CHANNEL_ID", "C07D7F5531N"),
             "Product Dashboard": os.environ.get("PRODUCT_CHANNEL_ID", "C07C44USZKR"),
-            "Data API Dashboard": os.environ.get("DATA_API_CHANNEL_ID", "C07F3SD76EA")
+            "TM API Dashboard": os.environ.get("TM_API_CHANNEL_ID", "C07F3SD76EA")
         }
     
     async def send_message(self, channel_id: str, text: str, thread_ts: Optional[str] = None) -> Dict:
@@ -130,7 +130,8 @@ class SlackReporter:
                 logger.info(f"Sending weekly report for {dashboard_name} to channel {channel_id}")
                 
                 # Send the report to the appropriate channel
-                await self.send_message(channel_id, report)
+                await self.send_message(channel_id, report + "\n\n" + "@channel")
+                print(f"Weekly report for {dashboard_name} sent to {channel_id}")
                 logger.info(f"Weekly report for {dashboard_name} sent to {channel_id}")
             
             return True
@@ -143,7 +144,7 @@ if __name__ == "__main__":
     # Create an async function to run
     async def main():
         reporter = SlackReporter(os.getenv("SLACK_BOT_TOKEN"))
-        await reporter.send_weekly_report(["Product Dashboard", "Marketing Dashboard", "Data API Dashboard"])
+        await reporter.send_weekly_report(["Product Dashboard", "Marketing Dashboard", "TM API Dashboard"])
     
     # Run the async function
     asyncio.run(main())
