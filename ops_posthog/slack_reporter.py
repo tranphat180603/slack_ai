@@ -130,10 +130,11 @@ class SlackReporter:
                 logger.info(f"Sending weekly report for {dashboard_name} to channel {channel_id}")
                 
                 # Send the report to the appropriate channel
-                await self.send_message(channel_id, report + "\n\n" + "@channel")
+                # await self.send_message(channel_id, report + "\n\n" + "@channel")
+                print("Temporarily disabled sending to slack")
                 print(f"Weekly report for {dashboard_name} sent to {channel_id}")
                 logger.info(f"Weekly report for {dashboard_name} sent to {channel_id}")
-            
+
             return True
             
         except Exception as e:

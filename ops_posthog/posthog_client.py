@@ -523,6 +523,8 @@ class PosthogClient:
             
             # Use OpenAI for analysis
             ai_client = OpenaiClient(openai_api_key, model="o3")
+
+            print(f"Using model: {ai_client.model}")
             
             # Generate insights with a system prompt that guides the AI
             system_prompt = """You are TMAI Agent, a helpful assistant operate within the company called Token Metrics, a company works in the field of crypto and AI.
