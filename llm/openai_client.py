@@ -130,7 +130,8 @@ class TokenUsageTracker:
             "o1-mini": {"input": 3.0, "cached": 1.5, "output": 15.0},    # Claude 3.5 Sonnet ($3/1M input, $1.5/1M cached, $15/1M output)
             "o1": {"input": 15.0, "cached": 7.5, "output": 60.0},        # Claude 3.5 Opus ($15/1M input, $7.5/1M cached, $60/1M output)
             "o3-mini": {"input": 1.1, "cached": 0.55, "output": 4.4},    # Claude 3 Haiku ($1.1/1M input, $0.55/1M cached, $4.4/1M output)
-            "o3": {"input": 3.0, "cached": 1.5, "output": 15.0}          # Claude 3 Sonnet ($3/1M input, $1.5/1M cached, $15/1M output)
+            "o3": {"input": 3.0, "cached": 1.5, "output": 15.0},          # Claude 3 Sonnet ($3/1M input, $1.5/1M cached, $15/1M output)
+            "o4-mini-2025-04-16": {"input": 1.1, "cached": 0.275, "output": 4.4},    # OpenAI 4 Mini ($1.0/1M input, $0.5/1M cached, $4.0/1M output)
         }
         
         # Default cost rates if specific model not found

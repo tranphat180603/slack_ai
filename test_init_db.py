@@ -93,4 +93,4 @@ if __name__ == "__main__":
         sys.exit(0)
     else:
         logger.error("❌ Test failed")
-        sys.exit(1) 
+        sys.exit(1)

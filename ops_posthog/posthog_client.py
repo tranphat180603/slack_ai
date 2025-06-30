@@ -522,7 +522,7 @@ class PosthogClient:
                 return "Error: OpenAI API key not configured"
             
             # Use OpenAI for analysis
-            ai_client = OpenaiClient(openai_api_key, model="o3")
+            ai_client = OpenaiClient(openai_api_key, model="o4-mini-2025-04-16")
 
             print(f"Using model: {ai_client.model}")
             
@@ -626,20 +626,15 @@ Please provide a comprehensive weekly analysis with the following sections:
 2. Recommendations - 3 data-driven, actionable recommendations
 
 General rule:
-- Get straight to the point without any heading. Make sure the entire report does not exceed 280 words. Make it condensed like a X post (Twitter tweet).
+- Focus specifically on the latest week's data.
+- Get straight to the point without any heading. Make sure the entire report does not exceed 150 words. Make it condensed like a X post (Twitter tweet).
 - Focus on extracting valuable insights rather than just describing numbers.
-- Pay attention to the time period (today's date and current week) of the data you are analyzing. If the current week's not finish, focus on the previous weeks' data. Only give comparison on weeks that are complete (have full week's data).
-- Only give a brief update of the current week's data. And it should not be compared with the previous weeks' data since it's not complete yet.
-- For each insight, if an image URL is available in 'Insight images', include it directly under its analysis using the Slack link format: <IMAGE_URL|View {Insight Name} Image>. Do NOT use Markdown [Text](URL) format. If an image URL is not related to the insight, just ignore it.
-- Remember, if a week is not complete, compare it with completd weeks data makes no sense at all. Just skip it entirely, focus on the complete weeks.
+- For each insight, if an image URL is available in 'Insight images', include it directly under its analysis using the Slack link format: <IMAGE_URL|View {Insight Name} Image>. Do NOT use Markdown [Text](URL) format. If an image URL is not related to the insight, just ignore it. If there's no image, just don't mention it entirely.
 - Add 2 new lines between each section.
 
 IMPORTANT: Creatively use these Slack's supported markdown as much as you can to make the report more readable. But do not use other markdown formatting that isn't listed here:
-For highlighting text, let's use inline code block for formatting. Sometimes, you can also use bold and italics but I believe inline code block is more readable.
 - Use *text* for bold
 - Use _text_ for italics
-- Use `code` for inline code
-- For block code
 - Use > for block quotes
 - Use line breaks with \n
 - For links, use: <URL|Source (or whatever display text you want)>
@@ -683,7 +678,7 @@ AGAIN: DO NOT USE OTHER MARKDOWN FORMATTING THAT IS NOT LISTED HERE.
         if len(dashboard_names) > 1:
             # Initialize OpenAI client for cross-dashboard analysis
             openai_api_key = os.environ.get("OPENAI_API_KEY")
-            ai_client = OpenaiClient(openai_api_key, model="o3")
+            ai_client = OpenaiClient(openai_api_key, model="o4-mini-2025-04-16")
             
             # Generate cross-dashboard insights
             system_prompt = """You are TMAI Agent, a helpful assistant operate within the company called Token Metrics, a company works in the field of crypto and AI.
@@ -741,7 +736,7 @@ Present your analysis in a clear, concise format suitable for executives and sta
         return response.content
 
     
-    def wait_for_export(self, export_id: str, max_retries: int = 60, delay: int = 5) -> Dict:
+    def wait_for_export(self, export_id: str, max_retries: int = 60, delay: int = 1) -> Dict:
         """
         Wait for an export job to complete.
         

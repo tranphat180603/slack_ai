@@ -72,7 +72,7 @@ SLACK_USER_TOKEN = os.environ.get("SLACK_USER_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 # Get model configuration (allowing different models for different components)
-DEFAULT_AI_MODEL = os.environ.get("AI_MODEL", "o3-mini")
+DEFAULT_AI_MODEL = os.environ.get("AI_MODEL", "o4-mini-2025-04-16")
 COMMANDER_MODEL = os.environ.get("COMMANDER_MODEL", DEFAULT_AI_MODEL)
 CAPTAIN_MODEL = os.environ.get("CAPTAIN_MODEL", DEFAULT_AI_MODEL)
 SOLDIER_MODEL = os.environ.get("SOLDIER_MODEL", DEFAULT_AI_MODEL)

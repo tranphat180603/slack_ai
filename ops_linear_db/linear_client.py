@@ -131,12 +131,10 @@ class LinearClient:
             '@Drich': {'linear_display_name': 'raldrich', 'team': 'PRO'},
             '@Bartosz': {'linear_display_name': 'bartosz', 'team': 'ENG'},
             '@Jake': {'linear_display_name': 'jake', 'team': 'AI'},
-            '@Roshan Ganesh': {'linear_display_name': 'roshan1', 'team': 'MKT'},
             '@Sam Monac': {'linear_display_name': 'sam', 'team': None},
             '@Favour': {'linear_display_name': 'favour', 'team': 'OPS'},
             '@Suleman Tariq': {'linear_display_name': 'suleman', 'team': 'ENG'},
             '@Zaiying Li': {'linear_display_name': 'zaiying', 'team': 'OPS'},
-            '@Hemank': {'linear_display_name': 'hemank', 'team': 'RES'},
             '@Ben': {'linear_display_name': 'ben', 'team': 'PRO'},
             '@Chao': {'linear_display_name': 'chao', 'team': 'AI'},
             '@Abdullah': {'linear_display_name': 'abdullah', 'team': 'RES'},
@@ -148,18 +146,17 @@ class LinearClient:
             '@Özcan İlhan': {'linear_display_name': 'ozcan', 'team': 'ENG'},
             '@Faith Oladejo': {'linear_display_name': 'faith', 'team': 'PRO'},
             '@Taf': {'linear_display_name': 'tafcirm', 'team': 'MKT'},
-            '@Caleb N': {'linear_display_name': 'caleb', 'team': 'MKT'},
             '@divine': {'linear_display_name': 'divine', 'team': 'ENG'},
             '@Williams': {'linear_display_name': 'williams', 'team': 'ENG'},
             '@Anki Truong': {'linear_display_name': 'ankit', 'team': 'ENG'},
-            '@Ryan': {'linear_display_name': 'ryan', 'team': 'MKT'},
             '@Phat': {'linear_display_name': 'phat', 'team': 'OPS'},
             '@AhmedHamdy': {'linear_display_name': 'ahmedhamdy', 'team': 'AI'},
             '@Grady': {'linear_display_name': 'grady', 'team': 'AI'},
             '@Khadijah': {'linear_display_name': 'khadijah', 'team': 'OPS'},
             '@Talha Cagri': {'linear_display_name': 'talhacagri', 'team': 'AI'},
             '@Agustín Gamoneda': {'linear_display_name': 'agustin', 'team': 'MKT'},
-            '@Peterson': {'linear_display_name': 'peterson', 'team': 'ENG'}
+            '@Peterson': {'linear_display_name': 'peterson', 'team': 'ENG'},
+            '@Vasil': {'linear_display_name': 'vasil', 'team': 'MKT'}
         }
         if slack_display_name:
             return users_info.get(slack_display_name, None)
@@ -1052,7 +1049,7 @@ class LinearClient:
 # Example Usage
 # ---------------------------
 if __name__ == "__main__":
-    TEAM_KEY = "OPS"
+    TEAM_KEY = "AI"
     OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
     linear = LinearClient(os.getenv('LINEAR_API_KEY'))

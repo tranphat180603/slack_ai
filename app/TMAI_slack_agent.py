@@ -521,7 +521,7 @@ class TMAISlackAgent:
         slack_bot_token: str,
         slack_user_token: Optional[str] = None,
         openai_api_key: Optional[str] = None,
-        ai_model: str = "o3-mini",
+        ai_model: str = "o4-mini-2025-04-16",
         prompts: Dict = None,
         model_config: Optional[Dict[str, str]] = None
     ):

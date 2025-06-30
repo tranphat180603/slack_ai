@@ -130,9 +130,9 @@ class SlackReporter:
                 logger.info(f"Sending weekly report for {dashboard_name} to channel {channel_id}")
                 
                 # Send the report to the appropriate channel
-                await self.send_message(channel_id, report + "\n\n" + "@channel")
-                print(f"Weekly report for {dashboard_name} sent to {channel_id}")
-                logger.info(f"Weekly report for {dashboard_name} sent to {channel_id}")
+                # await self.send_message(channel_id, report + "\n\n" + "@channel")
+                # print(f"Weekly report for {dashboard_name} sent to {channel_id}")
+                # logger.info(f"Weekly report for {dashboard_name} sent to {channel_id}")
 
             return True
             
@@ -144,7 +144,7 @@ if __name__ == "__main__":
     # Create an async function to run
     async def main():
         reporter = SlackReporter(os.getenv("SLACK_BOT_TOKEN"))
-        await reporter.send_weekly_report(["Product Dashboard", "Marketing Dashboard", "TM API Dashboard"])
+        await reporter.send_weekly_report( ["TM API Dashboard"])
     
     # Run the async function
     asyncio.run(main())
