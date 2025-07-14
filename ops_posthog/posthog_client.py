@@ -267,7 +267,8 @@ class PosthogClient:
                         "name": insight_data.get("name", insight_data.get("derived_name", "Unnamed insight")),
                         "description": insight_data.get("description", ""),
                         "last_refresh": insight_data.get("last_refresh"),
-                        "type": "UNKNOWN"  # Default type
+                        "type": "UNKNOWN",  # Default type
+                        "dashboard_name": dashboard_name  # Add dashboard name for grouping
                     }
 
                     query_data = insight_data.get("query", {})
@@ -538,7 +539,7 @@ Write a concise and straight to the point report. Don't include any fluff. Don't
             print(f"User Prompt: {prompt}")
             full_response = ""
             # Get AI response
-            insights = ai_client.response_reasoning(prompt=system_prompt + "\n\n" + prompt, reasoning_effort="medium")
+            insights = ai_client.response_reasoning(prompt=system_prompt + "\n\n" + prompt, reasoning_effort="high")
             full_response = insights
             print(f"Full Response: {full_response}")
             return full_response
@@ -626,9 +627,199 @@ Please provide a comprehensive weekly analysis with the following sections:
 2. Recommendations - 3 data-driven, actionable recommendations
 
 General rule:
-- Focus specifically on the latest week's data.
+- Focus specifically on the latest week's data. Which spans from 30 June - 6 July, give comparisons to the last week of it, laser focused on it!
 - Get straight to the point without any heading. Make sure the entire report does not exceed 150 words. Make it condensed like a X post (Twitter tweet).
 - Focus on extracting valuable insights rather than just describing numbers.
+- For each insight, if an image URL is available in 'Insight images', include it directly under its analysis using the Slack link format: <IMAGE_URL|View {Insight Name} Image>. Do NOT use Markdown [Text](URL) format. If an image URL is not related to the insight, just ignore it. If there's no image, just don't mention it entirely.
+- Add 2 new lines between each section.
+
+IMPORTANT: Creatively use these Slack's supported markdown as much as you can to make the report more readable. But do not use other markdown formatting that isn't listed here:
+- Use *text* for bold
+- Use _text_ for italics
+- Use > for block quotes
+- Use line breaks with \n
+- For links, use: <URL|Source (or whatever display text you want)>
+- For lists, use - followed by a space
+- Do not use #, ##, ### for headers
+AGAIN: DO NOT USE OTHER MARKDOWN FORMATTING THAT IS NOT LISTED HERE.
+"""
+        return prompt
+    
+    def _format_combined_dashboard_data(self, combined_data: Dict) -> str:
+        """Format combined dashboard data for LLM readability."""
+        formatted_output = []
+        
+        # Group insights by dashboard
+        dashboard_insights = {}
+        for insight in combined_data.get("all_insights", []):
+            # Try to determine which dashboard this insight belongs to
+            dashboard_name = "Unknown Dashboard"
+            if "dashboard_name" in insight:
+                dashboard_name = insight["dashboard_name"]
+            
+            if dashboard_name not in dashboard_insights:
+                dashboard_insights[dashboard_name] = []
+            dashboard_insights[dashboard_name].append(insight)
+        
+        # Format each dashboard's insights
+        for dashboard_name, insights in dashboard_insights.items():
+            formatted_output.append(f"\n=== {dashboard_name} ===")
+            
+            for insight in insights:
+                formatted_output.append(f"\nInsight: {insight.get('name', 'Unnamed')}")
+                formatted_output.append(f"Type: {insight.get('type', 'Unknown')}")
+                formatted_output.append(f"Description: {insight.get('description', 'No description')}")
+                
+                # Include all available insight metadata
+                if insight.get('last_refresh'):
+                    formatted_output.append(f"Last Refresh: {insight['last_refresh']}")
+                if insight.get('short_id'):
+                    formatted_output.append(f"Short ID: {insight['short_id']}")
+                if insight.get('id'):
+                    formatted_output.append(f"Full ID: {insight['id']}")
+                
+                # Format series data based on type - INCLUDE ALL DATA
+                if insight.get('type') == 'TrendsQuery' and insight.get('series_data'):
+                    formatted_output.append("Series Data:")
+                    for series in insight['series_data']:
+                        formatted_output.append(f"  • {series.get('series_name', 'Unknown Series')}")
+                        formatted_output.append(f"    Event: {series.get('event', 'N/A')}")
+                        formatted_output.append(f"    Math Operation: {series.get('math_operation', 'N/A')}")
+                        if series.get('math_property'):
+                            formatted_output.append(f"    Math Property: {series['math_property']}")
+                        
+                        # Include ALL data points with dates
+                        if series.get('data_points'):
+                            data_points = series['data_points']  # ALL data points, no truncation
+                            labels = series.get('labels', [])
+                            days = series.get('days', [])
+                            
+                            # Use labels if available, otherwise use days
+                            date_labels = labels if labels else days if days else []
+                            
+                            if date_labels and len(date_labels) == len(data_points):
+                                # Format as date: value pairs for ALL data
+                                date_value_pairs = []
+                                for date, value in zip(date_labels, data_points):
+                                    if isinstance(date, str) and len(date) > 10:
+                                        date = date[:10]  # Truncate to date part only
+                                    date_value_pairs.append(f"{date}: {value}")
+                                formatted_output.append(f"    Complete Time Series: {', '.join(date_value_pairs)}")
+                            else:
+                                formatted_output.append(f"    All Values: {data_points}")
+                                if date_labels:
+                                    formatted_output.append(f"    All Labels: {date_labels}")
+                        
+                        if series.get('aggregated_value'):
+                            formatted_output.append(f"    Aggregated Value: {series['aggregated_value']}")
+                
+                elif insight.get('type') == 'LifecycleQuery' and insight.get('lifecycle_stages'):
+                    formatted_output.append("Complete Lifecycle Analysis:")
+                    for stage in insight['lifecycle_stages']:
+                        formatted_output.append(f"  • {stage.get('stage_label', 'Unknown Stage')}")
+                        formatted_output.append(f"    Status: {stage.get('status', 'N/A')}")
+                        formatted_output.append(f"    Event: {stage.get('event_name', 'N/A')}")
+                        formatted_output.append(f"    Math Operation: {stage.get('math_operation', 'N/A')}")
+                        
+                        if stage.get('data_points'):
+                            data_points = stage['data_points']  # ALL data points
+                            labels = stage.get('labels', [])
+                            days = stage.get('days', [])
+                            
+                            date_labels = labels if labels else days if days else []
+                            
+                            if date_labels and len(date_labels) == len(data_points):
+                                date_value_pairs = []
+                                for date, value in zip(date_labels, data_points):
+                                    if isinstance(date, str) and len(date) > 10:
+                                        date = date[:10]
+                                    date_value_pairs.append(f"{date}: {value}")
+                                formatted_output.append(f"    Complete Time Series: {', '.join(date_value_pairs)}")
+                            else:
+                                formatted_output.append(f"    All Values: {data_points}")
+                
+                elif insight.get('type') == 'RetentionQuery' and insight.get('cohorts'):
+                    formatted_output.append("Complete Retention Analysis:")
+                    for cohort in insight['cohorts']:  # ALL cohorts, no truncation
+                        formatted_output.append(f"  • {cohort.get('cohort_label', 'Unknown Cohort')}")
+                        formatted_output.append(f"    Start Date: {cohort.get('cohort_start_date', 'N/A')}")
+                        if cohort.get('retention_periods'):
+                            periods = cohort['retention_periods']  # ALL periods
+                            formatted_output.append(f"    All Retention Periods: {periods}")
+                
+                elif insight.get('type') == 'FunnelsQuery' and insight.get('raw_result'):
+                    formatted_output.append("Funnel Analysis:")
+                    formatted_output.append(f"    Complete Funnel Data: {insight['raw_result']}")
+                
+                elif insight.get('generic_series_data'):
+                    formatted_output.append("Complete Generic Series Data:")
+                    for series in insight['generic_series_data']:
+                        formatted_output.append(f"  • {series.get('series_name', 'Unknown Series')}")
+                        formatted_output.append(f"    Event: {series.get('event', 'N/A')}")
+                        formatted_output.append(f"    Math Operation: {series.get('math_operation', 'N/A')}")
+                        if series.get('math_property'):
+                            formatted_output.append(f"    Math Property: {series['math_property']}")
+                        
+                        if series.get('data_points'):
+                            data_points = series['data_points']  # ALL data points
+                            labels = series.get('labels', [])
+                            days = series.get('days', [])
+                            
+                            date_labels = labels if labels else days if days else []
+                            
+                            if date_labels and len(date_labels) == len(data_points):
+                                date_value_pairs = []
+                                for date, value in zip(date_labels, data_points):
+                                    if isinstance(date, str) and len(date) > 10:
+                                        date = date[:10]
+                                    date_value_pairs.append(f"{date}: {value}")
+                                formatted_output.append(f"    Complete Time Series: {', '.join(date_value_pairs)}")
+                            else:
+                                formatted_output.append(f"    All Values: {data_points}")
+                
+                elif insight.get('raw_result'):
+                    formatted_output.append(f"Complete Raw Result: {insight['raw_result']}")
+                
+                # Also include any additional fields that might be in the insight
+                additional_fields = ['series_names', 'common_labels', 'common_days']
+                for field in additional_fields:
+                    if insight.get(field):
+                        formatted_output.append(f"{field.replace('_', ' ').title()}: {insight[field]}")
+                
+                formatted_output.append("")  # Empty line between insights
+        
+        return "\n".join(formatted_output)
+    
+    def _get_multi_dashboard_weekly_prompt(self, dashboard_names: List[str], combined_data: Dict) -> str:
+        """Generate prompt for multi-dashboard weekly analysis."""
+        
+        # Format the combined data nicely
+        formatted_data = self._format_combined_dashboard_data(combined_data)
+        
+        prompt = f"""Analyze the following Posthog analytics data across multiple dashboards over the past 28 days.
+
+Dashboards: {', '.join(dashboard_names)}
+Today's date: {self._get_date_and_week_range()[0]}
+Current week that spans from: start date: {self._get_date_and_week_range()[1]} to end date: {self._get_date_and_week_range()[2]}
+
+Dashboard Analytics Data:
+{formatted_data}
+
+Insight Images Available:
+{combined_data.get("all_insights_images")}
+"""
+        prompt += "\n"
+        
+        prompt += """
+Please provide a comprehensive cross-dashboard weekly analysis with the following sections:
+1. Insights - Blazing fast point-by-point look at only top 5 important/notable metrics, trends, and patterns across all dashboards. Include the image URL of each insight under its analysis.
+2. Cross-Dashboard Correlations - Identify relationships between metrics from different dashboards
+3. Recommendations - 3 data-driven, actionable recommendations based on the holistic view
+
+General rule:
+- Focus specifically on the latest week's data and cross-dashboard patterns
+- Get straight to the point without any heading. Make sure the entire report does not exceed 200 words for multi-dashboard analysis
+- Focus on extracting valuable insights rather than just describing numbers
 - For each insight, if an image URL is available in 'Insight images', include it directly under its analysis using the Slack link format: <IMAGE_URL|View {Insight Name} Image>. Do NOT use Markdown [Text](URL) format. If an image URL is not related to the insight, just ignore it. If there's no image, just don't mention it entirely.
 - Add 2 new lines between each section.
 
@@ -663,45 +854,62 @@ AGAIN: DO NOT USE OTHER MARKDOWN FORMATTING THAT IS NOT LISTED HERE.
         
         Args:
             dashboard_names: List of dashboard names to include
+            slack_channel_id: Optional Slack channel ID for uploading screenshots
+            slack_thread_ts: Optional Slack thread timestamp for uploads
             
         Returns:
             AI-generated comprehensive weekly report
         """
-        # For multi-dashboard reports, combine the data first
-        combined_insights = ""
-        
-        for dashboard_name in dashboard_names:
-            dashboard_insights = self.generate_ai_insights(dashboard_name, days=28, insight_type="weekly", slack_channel_id=slack_channel_id, slack_thread_ts=slack_thread_ts)
-            dashboard_insights = f"*Weekly Report for {dashboard_name}*\n\n`{dashboard_insights}`\n\n---\n\n"
-        
-        # If there are multiple dashboards, add a cross-dashboard analysis
-        if len(dashboard_names) > 1:
-            # Initialize OpenAI client for cross-dashboard analysis
+        try:
+            # If only one dashboard, use the existing single dashboard logic
+            if len(dashboard_names) == 1:
+                return self.generate_ai_insights(dashboard_names[0], days=28, insight_type="weekly", slack_channel_id=slack_channel_id, slack_thread_ts=slack_thread_ts)
+            
+            # For multiple dashboards, combine all data first
+            combined_data = {
+                "dashboards": [],
+                "all_insights": [],
+                "all_insights_images": {}
+            }
+            
+            # Collect data from all dashboards
+            for dashboard_name in dashboard_names:
+                dashboard_data = self.get_dashboard_data(dashboard_name, days=28, slack_channel_id=slack_channel_id, slack_thread_ts=slack_thread_ts)
+                
+                if "error" not in dashboard_data:
+                    combined_data["dashboards"].append(dashboard_name)
+                    combined_data["all_insights"].extend(dashboard_data.get("insights", []))
+                    combined_data["all_insights_images"].update(dashboard_data.get("insights_images", {}))
+                else:
+                    logger.warning(f"Error getting data for {dashboard_name}: {dashboard_data['error']}")
+            
+            # Generate multi-dashboard prompt
+            prompt = self._get_multi_dashboard_weekly_prompt(dashboard_names, combined_data)
+            
+            # Initialize OpenAI client
             openai_api_key = os.environ.get("OPENAI_API_KEY")
+            if not openai_api_key:
+                logger.error("OPENAI_API_KEY environment variable not set")
+                return "Error: OpenAI API key not configured"
+            
             ai_client = OpenaiClient(openai_api_key, model="o4-mini-2025-04-16")
             
-            # Generate cross-dashboard insights
+            # Generate insights with a system prompt
             system_prompt = """You are TMAI Agent, a helpful assistant operate within the company called Token Metrics, a company works in the field of crypto and AI.
-You synthesize insights across multiple dashboards to identify holistic patterns and business opportunities."""
-            
-            cross_dashboard_prompt = f"""Based on the individual dashboard analyses below, provide a cross-dashboard synthesis that identifies:
-1. Overarching trends across all dashboards
-2. Correlations between metrics in different dashboards
-3. Strategic recommendations based on the full picture
-
-Individual dashboard analyses:
-{dashboard_insights}
-
-Present your analysis in a clear, concise format suitable for executives and stakeholders.
+You analyze Posthog data across multiple dashboards and provide clear, concise, and actionable insights.
+Focus on identifying cross-dashboard trends, correlations, and strategic opportunities.
+Format your analysis with clear sections, bullet points for key insights, and use emoji indicators (📈 for increases, 📉 for decreases).
+Your insights should be data-driven, specific, and include numeric values where relevant.
+Write a concise and straight to the point report. Don't include any fluff. Don't beat around the bush.
 """
-            cross_analysis = ai_client.response_reasoning(prompt=system_prompt + "\n\n" + cross_dashboard_prompt, reasoning_effort="medium")
             
-            # Add the cross-analysis to the report
-            final_report = f"# Weekly Cross-Dashboard Analysis\n\n{cross_analysis}\n\n---\n\n{combined_insights}"
-            return final_report
-        
-        # If only one dashboard, return the single analysis
-        return dashboard_insights
+            # Get AI response
+            insights = ai_client.response_reasoning(prompt=system_prompt + "\n\n" + prompt, reasoning_effort="high")
+            return insights
+            
+        except Exception as e:
+            logger.error(f"Error generating weekly report: {str(e)}")
+            return f"Error generating weekly report: {str(e)}"
         
     def create_export_job(self, export_type: str, export_id: str, export_format: str = "image/png") -> Dict:
         """
@@ -1062,8 +1270,8 @@ def main():
     
     elif args.action == 'ai_weekly_insights':
         if not args.dashboard:
-            print("Using default dashboards: Marketing Dashboard and Product Dashboard")
-            dashboards = ["Marketing Dashboard", "Product Dashboard"]
+            print("Using default dashboards: Marketing Dashboard, Product Dashboard, Trading Dashboard")
+            dashboards = ["Marketing Dashboard", "Product Dashboard", "Trading Dashboard"]
         else:
             dashboards = [args.dashboard]
             

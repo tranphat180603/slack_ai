@@ -15,25 +15,40 @@ logger = logging.getLogger("slack_reporter")
 class SlackReporter:
     """Class for sending Posthog reports to Slack channels."""
     
-    def __init__(self, slack_token: str = None):
+    def __init__(self, slack_token: str = None, enable_images: bool = True):
         """
         Initialize the Slack reporter.
         
         Args:
             slack_token: Slack API token (defaults to SLACK_BOT_TOKEN env var)
+            enable_images: Whether to generate and upload insight images (defaults to True)
         """
         self.slack_token = slack_token or os.environ.get("SLACK_BOT_TOKEN")
         if not self.slack_token:
             raise ValueError("Slack API token is required")
         
         self.slack_client = WebClient(token=self.slack_token)
-        logger.info("SlackReporter initialized")
+        self.enable_images = enable_images
+        logger.info(f"SlackReporter initialized (images: {'enabled' if enable_images else 'disabled'})")
         
-        # Channel mappings
-        self.channel_map = {
-            "Marketing Dashboard": os.environ.get("MARKETING_CHANNEL_ID", "C07D7F5531N"),
-            "Product Dashboard": os.environ.get("PRODUCT_CHANNEL_ID", "C07C44USZKR"),
-            "TM API Dashboard": os.environ.get("TM_API_CHANNEL_ID", "C07F3SD76EA")
+        # Channel mappings - now maps channel IDs to lists of dashboards
+        self.channel_dashboards = {
+            os.environ.get("PRODUCT_CHANNEL_ID", "C07C44USZKR"): {
+                "channel_name": "Product",
+                "dashboards": ["Product Dashboard", "Trading Dashboard", "Usage Analytics Dashboards"]
+            },
+            os.environ.get("MARKETING_CHANNEL_ID", "C07D7F5531N"): {
+                "channel_name": "Marketing",
+                "dashboards": ["Marketing Dashboard"]
+            },
+            os.environ.get("TM_API_CHANNEL_ID", "C07F3SD76EA"): {
+                "channel_name": "TM API",
+                "dashboards": ["API Dashboard"]
+            },
+            "C092DANQ5RT": {  # tm-moonshot channel
+                "channel_name": "TM Moonshot",
+                "dashboards": ["Moonshot Analytics"]
+            }
         }
     
     async def send_message(self, channel_id: str, text: str, thread_ts: Optional[str] = None) -> Dict:
@@ -77,7 +92,7 @@ class SlackReporter:
             # Initialize PosthogClient
             posthog_client = PosthogClient()
             
-            # Generate report
+            # Generate report (images are not typically used for daily reports, but respect the setting)
             report = posthog_client.generate_daily_report(dashboard_name)
             
             # Determine if report should be sent (only send if there are significant changes)
@@ -85,12 +100,16 @@ class SlackReporter:
                 logger.info(f"No significant changes for {dashboard_name}, skipping alert")
                 return True
             
-            # Get the appropriate channel from the channel map
-            channel_id = self.channel_map.get(dashboard_name)
+            # Find the channel that contains this dashboard
+            channel_id = None
+            for ch_id, ch_config in self.channel_dashboards.items():
+                if dashboard_name in ch_config["dashboards"]:
+                    channel_id = ch_id
+                    break
+            
             if not channel_id:
-                logger.warning(f"No channel mapping found for {dashboard_name}, using fallback")
-                # Fall back to dashboard name as channel name
-                channel_id = dashboard_name.lower().replace(" dashboard", "")
+                logger.warning(f"No channel mapping found for {dashboard_name}")
+                return False
             
             # Send the report
             await self.send_message(channel_id, report)
@@ -101,50 +120,89 @@ class SlackReporter:
             logger.error(f"Error sending daily report for {dashboard_name}: {str(e)}")
             return False
     
-    async def send_weekly_report(self, dashboard_names: List[str]) -> bool:
+    async def send_weekly_report(self, channel_ids: Optional[List[str]] = None) -> bool:
         """
-        Generate and send a comprehensive weekly report for multiple dashboards.
+        Generate and send comprehensive weekly reports for channels.
         
         Args:
-            dashboard_names: List of dashboard names to include
+            channel_ids: List of specific channel IDs to send reports to. If None, sends to all channels.
             
         Returns:
-            True if report was sent successfully, False otherwise
+            True if all reports were sent successfully, False otherwise
         """
         try:
             # Initialize PosthogClient
             posthog_client = PosthogClient()
             
-            # Process each dashboard and send to appropriate channel
-            for dashboard_name in dashboard_names:
-                # Get channel ID from mapping
-                channel_id = self.channel_map.get(dashboard_name)
-                
-                if not channel_id:
-                    logger.warning(f"No channel mapping found for {dashboard_name}, skipping report")
+            # Use all channels if none specified
+            if channel_ids is None:
+                channel_ids = list(self.channel_dashboards.keys())
+            
+            success_count = 0
+            
+            # Process each channel
+            for channel_id in channel_ids:
+                if channel_id not in self.channel_dashboards:
+                    logger.warning(f"Channel ID {channel_id} not found in configuration, skipping")
                     continue
                 
-                # Generate report for this dashboard
-                report = posthog_client.generate_weekly_report([dashboard_name], slack_channel_id=channel_id)
+                channel_config = self.channel_dashboards[channel_id]
+                channel_name = channel_config["channel_name"]
+                dashboard_names = channel_config["dashboards"]
                 
-                logger.info(f"Sending weekly report for {dashboard_name} to channel {channel_id}")
+                print(f"Generating weekly report for {channel_name} channel with dashboards: {dashboard_names}")
                 
-                # Send the report to the appropriate channel
-                # await self.send_message(channel_id, report + "\n\n" + "@channel")
-                # print(f"Weekly report for {dashboard_name} sent to {channel_id}")
-                # logger.info(f"Weekly report for {dashboard_name} sent to {channel_id}")
+                # Generate combined report for all dashboards in this channel
+                # Only pass slack_channel_id if images are enabled
+                report = posthog_client.generate_weekly_report(
+                    dashboard_names, 
+                    slack_channel_id=channel_id if self.enable_images else None
+                )
 
-            return True
+                report_with_title = f"*Weekly Report for {channel_name} Team*\n\n" + report
+                
+                # Send the report to the channel
+                await self.send_message(channel_id, report_with_title + "\n\n") #test channel: C08C6ENV0G0
+                print(f"Weekly report for {channel_name} channel sent to {channel_id}")
+                logger.info(f"Weekly report for {channel_name} channel sent to {channel_id}")
+                success_count += 1
+
+            return success_count == len(channel_ids)
             
         except Exception as e:
             logger.error(f"Error sending weekly report: {str(e)}")
             return False
         
 if __name__ == "__main__":
+    import argparse
+    
+    # Set up command line arguments
+    parser = argparse.ArgumentParser(description='Send weekly Posthog reports to Slack')
+    parser.add_argument('--no-images', action='store_true', 
+                        help='Disable image generation and upload (faster for testing)')
+    
+    args = parser.parse_args()
+    
     # Create an async function to run
     async def main():
-        reporter = SlackReporter(os.getenv("SLACK_BOT_TOKEN"))
-        await reporter.send_weekly_report( ["TM API Dashboard"])
+        # Check if images should be disabled via environment variable or command line
+        enable_images = not args.no_images and os.getenv("DISABLE_POSTHOG_IMAGES", "").lower() != "true"
+        
+        reporter = SlackReporter(
+            slack_token=os.getenv("SLACK_BOT_TOKEN"),
+            enable_images=enable_images
+        )
+        
+        print(f"🚀 Starting weekly report generation...")
+        print(f"📸 Images: {'enabled' if enable_images else 'disabled'}")
+        print("=" * 50)
+        
+        # Send to all channels
+        success = await reporter.send_weekly_report()
+        
+        print("=" * 50)
+        print(f"✅ Report generation completed: {'Success' if success else 'Failed'}")
     
     # Run the async function
     asyncio.run(main())
+
