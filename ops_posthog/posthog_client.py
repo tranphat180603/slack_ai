@@ -606,31 +606,37 @@ Be aware of the time period (today's date and current week) of the data you are 
     def _get_weekly_analysis_prompt(self, dashboard_name: str, data: Dict, days: int) -> str:
         """Generate prompt for weekly analysis."""
         
+        # Format the data using the same comprehensive formatting as multi-dashboard reports
+        formatted_data = self._format_combined_dashboard_data({
+            "all_insights": data.get("insights", []),
+            "all_insights_images": data.get("insights_images", {})
+        })
+        
         prompt = f"""Analyze the following Posthog analytics data for {dashboard_name} over the past {days} days.
 
 Dashboard: {dashboard_name}
-Today's date: {self._get_date_and_week_range()[0]}
-Current week that spans from: start date: {self._get_date_and_week_range()[1]} to end date: {self._get_date_and_week_range()[2]}
+Today's date: '13-07-2025'
+Current week that spans from: start date: '06-07-2025' to end date: '13-07-2025'
 Period: {data.get("period", f"{days} days")}
 
-Insights:
-{data.get("insights")}
+Dashboard Analytics Data:
+{formatted_data}
 
 Insight images:
 {data.get("insights_images")}
 """
         prompt += "\n"
         
-        prompt += """
+        prompt += f"""
 Please provide a comprehensive weekly analysis with the following sections:
 1. Insights - Blazing fast point-by-point look at only top 3 important/notable metrics, trends, and patterns. Include the image URL of each insight under it's analysis.
 2. Recommendations - 3 data-driven, actionable recommendations
 
 General rule:
-- Focus specifically on the latest week's data. Which spans from 30 June - 6 July, give comparisons to the last week of it, laser focused on it!
+- Focus specifically on the latest week's data. Which spans from '06-07-2025' to '13-07-2025', give comparisons to the last week of it, laser focused on it!
 - Get straight to the point without any heading. Make sure the entire report does not exceed 150 words. Make it condensed like a X post (Twitter tweet).
 - Focus on extracting valuable insights rather than just describing numbers.
-- For each insight, if an image URL is available in 'Insight images', include it directly under its analysis using the Slack link format: <IMAGE_URL|View {Insight Name} Image>. Do NOT use Markdown [Text](URL) format. If an image URL is not related to the insight, just ignore it. If there's no image, just don't mention it entirely.
+- For each insight, if an image URL is available in 'Insight images', include it directly under its analysis using the Slack link format: <IMAGE_URL|View {{Insight Name}} Image>. Do NOT use Markdown [Text](URL) format. If an image URL is not related to the insight, just ignore it. If there's no image, just don't mention it entirely.
 - Add 2 new lines between each section.
 
 IMPORTANT: Creatively use these Slack's supported markdown as much as you can to make the report more readable. But do not use other markdown formatting that isn't listed here:
