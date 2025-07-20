@@ -1564,34 +1564,317 @@ class PosthogTools:
                 raise ValueError("PostHog client is not initialized. Check your API credentials.")
     
     def get_dashboards(self) -> List[Dict]:
-        """Get a list of all dashboards in the PostHog project."""
+        """Get a list of all dashboards in the PostHog project with cleaned, AI-readable format."""
         self._check_client()
-        return self.client.get_dashboards()
+        raw_dashboards = self.client.get_dashboards()
+        
+        # Format dashboards for better AI readability
+        formatted_dashboards = []
+        for dashboard in raw_dashboards:
+            formatted_dashboard = {
+                "id": dashboard.get("id"),
+                "name": dashboard.get("name", "Unnamed Dashboard"),
+                "description": dashboard.get("description", ""),
+                "created_at": dashboard.get("created_at"),
+                "updated_at": dashboard.get("updated_at"),
+                "pinned": dashboard.get("pinned", False),
+                "is_shared": dashboard.get("is_shared", False),
+                "created_by": dashboard.get("created_by", {}).get("first_name", "Unknown") if dashboard.get("created_by") else "Unknown",
+                "tags": dashboard.get("tags", [])
+            }
+            formatted_dashboards.append(formatted_dashboard)
+        
+        return {
+            "total_dashboards": len(formatted_dashboards),
+            "dashboards": formatted_dashboards,
+            "pinned_dashboards": [d for d in formatted_dashboards if d["pinned"]],
+            "raw_dashboards": raw_dashboards  # Keep raw data for backward compatibility
+        }
     
     def get_dashboard_by_name(self, name: str) -> Dict:
-        """Find a dashboard by its name."""
+        """Find a dashboard by its name with cleaned, AI-readable format."""
         self._check_client()
-        return self.client.get_dashboard_by_name(name)
+        raw_dashboard = self.client.get_dashboard_by_name(name)
+        
+        if not raw_dashboard:
+            return {"error": f"Dashboard with name '{name}' not found"}
+        
+        # Format single dashboard for better AI readability
+        formatted_dashboard = {
+            "id": raw_dashboard.get("id"),
+            "name": raw_dashboard.get("name", "Unnamed Dashboard"),
+            "description": raw_dashboard.get("description", ""),
+            "created_at": raw_dashboard.get("created_at"),
+            "updated_at": raw_dashboard.get("updated_at"),
+            "pinned": raw_dashboard.get("pinned", False),
+            "is_shared": raw_dashboard.get("is_shared", False),
+            "created_by": raw_dashboard.get("created_by", {}).get("first_name", "Unknown") if raw_dashboard.get("created_by") else "Unknown",
+            "tags": raw_dashboard.get("tags", []),
+            "raw_dashboard": raw_dashboard  # Keep raw data for backward compatibility
+        }
+        
+        return formatted_dashboard
     
     def get_dashboard_by_id(self, dashboard_id: str) -> Dict:
-        """Get a dashboard by its ID."""
+        """Get a dashboard by its ID with cleaned, AI-readable format."""
         self._check_client()
-        return self.client.get_dashboard_by_id(dashboard_id)
+        raw_dashboard = self.client.get_dashboard_by_id(dashboard_id)
+        
+        if not raw_dashboard:
+            return {"error": f"Dashboard with ID '{dashboard_id}' not found"}
+        
+        # Format single dashboard for better AI readability
+        formatted_dashboard = {
+            "id": raw_dashboard.get("id"),
+            "name": raw_dashboard.get("name", "Unnamed Dashboard"),
+            "description": raw_dashboard.get("description", ""),
+            "created_at": raw_dashboard.get("created_at"),
+            "updated_at": raw_dashboard.get("updated_at"),
+            "pinned": raw_dashboard.get("pinned", False),
+            "is_shared": raw_dashboard.get("is_shared", False),
+            "created_by": raw_dashboard.get("created_by", {}).get("first_name", "Unknown") if raw_dashboard.get("created_by") else "Unknown",
+            "tags": raw_dashboard.get("tags", []),
+            "raw_dashboard": raw_dashboard  # Keep raw data for backward compatibility
+        }
+        
+        return formatted_dashboard
     
     def get_dashboard_items(self, dashboard_id: str) -> List[Dict]:
-        """Get all insights/charts in a dashboard."""
+        """Get all insights/charts in a dashboard with cleaned, AI-readable format."""
         self._check_client()
-        return self.client.get_dashboard_items(dashboard_id)
+        raw_items = self.client.get_dashboard_items(dashboard_id)
+        
+        # Extract and clean key information from dashboard items for better AI readability
+        formatted_items = []
+        for item in raw_items:
+            if isinstance(item, dict):
+                # Extract insight information from the item
+                insight_info = item.get("insight", {}) if "insight" in item else item
+                
+                formatted_item = {
+                    "item_id": item.get("id"),
+                    "insight_id": insight_info.get("id"),
+                    "insight_name": insight_info.get("name", insight_info.get("derived_name", "Unnamed")),
+                    "insight_description": insight_info.get("description", ""),
+                    "insight_type": "Unknown",
+                    "last_refresh": insight_info.get("last_refresh"),
+                    "created_at": insight_info.get("created_at"),
+                    "updated_at": insight_info.get("updated_at"),
+                    "position": {
+                        "x": item.get("layouts", {}).get("sm", {}).get("x", 0),
+                        "y": item.get("layouts", {}).get("sm", {}).get("y", 0),
+                        "width": item.get("layouts", {}).get("sm", {}).get("w", 0),
+                        "height": item.get("layouts", {}).get("sm", {}).get("h", 0)
+                    }
+                }
+                
+                # Determine insight type from filters or query
+                if insight_info.get("filters", {}).get("insight"):
+                    formatted_item["insight_type"] = insight_info["filters"]["insight"]
+                elif insight_info.get("query", {}).get("kind"):
+                    formatted_item["insight_type"] = insight_info["query"]["kind"]
+                
+                formatted_items.append(formatted_item)
+        
+        return {
+            "dashboard_id": dashboard_id,
+            "total_items": len(formatted_items),
+            "items": formatted_items,
+            "raw_items": raw_items  # Keep raw data for backward compatibility
+        }
     
     def get_insight_data(self, insight_id: str, days: int = 7) -> Dict:
-        """Get data for a specific insight/chart."""
+        """Get data for a specific insight/chart with formatted, AI-readable output."""
         self._check_client()
-        return self.client.get_insight_data(insight_id, days)
+        raw_data = self.client.get_insight_data(insight_id, days)
+        
+        # Apply formatting to make data more interpretable for AI
+        if raw_data and not raw_data.get("error"):
+            # Create a mock dashboard structure for the single insight
+            mock_insight = {
+                "id": raw_data.get("id"),
+                "short_id": raw_data.get("short_id"),
+                "name": raw_data.get("name", raw_data.get("derived_name", "Unnamed insight")),
+                "description": raw_data.get("description", ""),
+                "last_refresh": raw_data.get("last_refresh"),
+                "type": "UNKNOWN",
+                "dashboard_name": "Single Insight"
+            }
+            
+            # Apply the same insight processing logic as in get_dashboard_data
+            query_data = raw_data.get("query", {})
+            determined_kind = None
+
+            if query_data:
+                source_data = query_data.get("source", {})
+                determined_kind = source_data.get("kind")
+                if not determined_kind and query_data.get("kind") == 'InsightVizNode':
+                    nested_source_data = source_data.get("source", {})
+                    if isinstance(nested_source_data, dict):
+                        determined_kind = nested_source_data.get("kind")
+                if not determined_kind:
+                    determined_kind = query_data.get("kind")
+            
+            if not determined_kind:
+                insight_kind_from_filters = raw_data.get("filters", {}).get("insight")
+                if insight_kind_from_filters:
+                    if insight_kind_from_filters.upper() == 'TRENDS':
+                        determined_kind = 'TrendsQuery'
+                    elif insight_kind_from_filters.upper() == 'LIFECYCLE':
+                        determined_kind = 'LifecycleQuery'
+                    elif insight_kind_from_filters.upper() == 'RETENTION':
+                        determined_kind = 'RetentionQuery'
+                    else:
+                        determined_kind = insight_kind_from_filters
+            
+            mock_insight["type"] = determined_kind if determined_kind else "UNKNOWN"
+            
+            # Process the insight data in the same way as dashboard processing
+            result_list = raw_data.get("result", [])
+
+            if determined_kind == "TrendsQuery":
+                mock_insight["series_data"] = []
+                if result_list and isinstance(result_list, list) and len(result_list) > 0:
+                    mock_insight["common_labels"] = result_list[0].get("labels", [])
+                    mock_insight["common_days"] = result_list[0].get("days", [])
+                    
+                    query_series_configs = query_data.get("source", {}).get("series", [])
+                    if not query_series_configs and query_data.get("source", {}).get("source", {}):
+                         nested_source = query_data.get("source", {}).get("source", {})
+                         if isinstance(nested_source, dict):
+                             query_series_configs = nested_source.get("series", [])
+
+                    for i, series_result_item in enumerate(result_list):
+                        action_info = series_result_item.get("action", {})
+                        series_config = {}
+                        order_index = action_info.get("order")
+
+                        if order_index is not None and order_index < len(query_series_configs):
+                            series_config = query_series_configs[order_index]
+                        elif i < len(query_series_configs):
+                            series_config = query_series_configs[i]
+
+                        series_name = action_info.get("custom_name")
+                        if not series_name: series_name = series_config.get("custom_name")
+                        if not series_name: series_name = series_result_item.get("label", f"Series {i+1}")
+
+                        event_name = action_info.get("name", series_config.get("event", series_config.get("name")))
+                        math_op = action_info.get("math", series_config.get("math"))
+                        math_prop = action_info.get("math_property", series_config.get("math_property"))
+
+                        series_entry = {
+                            "series_name": series_name,
+                            "event": event_name,
+                            "math_operation": math_op,
+                            "math_property": math_prop,
+                            "data_points": series_result_item.get("data", []),
+                            "labels": series_result_item.get("labels", mock_insight.get("common_labels", [])),
+                            "days": series_result_item.get("days", mock_insight.get("common_days", []))
+                        }
+                        
+                        if "aggregated_value" in series_result_item:
+                            series_entry["aggregated_value"] = series_result_item.get("aggregated_value")
+                        
+                        mock_insight["series_data"].append(series_entry)
+                    if mock_insight["series_data"]:
+                        mock_insight["series_names"] = [s["series_name"] for s in mock_insight["series_data"]]
+
+            elif determined_kind == "LifecycleQuery":
+                mock_insight["lifecycle_stages"] = []
+                if result_list and isinstance(result_list, list):
+                    for stage_item in result_list:
+                        action_info = stage_item.get("action", {})
+                        mock_insight["lifecycle_stages"].append({
+                            "status": stage_item.get("status"),
+                            "stage_label": stage_item.get("label"),
+                            "event_name": action_info.get("name"),
+                            "math_operation": action_info.get("math"),
+                            "data_points": stage_item.get("data", []),
+                            "labels": stage_item.get("labels", []),
+                            "days": stage_item.get("days", [])
+                        })
+            
+            elif determined_kind == "RetentionQuery":
+                mock_insight["cohorts"] = []
+                if result_list and isinstance(result_list, list):
+                    for cohort_item in result_list:
+                        retention_periods_data = []
+                        for value_item in cohort_item.get("values", []):
+                            retention_periods_data.append({
+                                "period_label": value_item.get("label"),
+                                "count": value_item.get("count")
+                            })
+                        mock_insight["cohorts"].append({
+                            "cohort_start_date": cohort_item.get("date"),
+                            "cohort_label": cohort_item.get("label"),
+                            "retention_periods": retention_periods_data
+                        })
+            else:
+                if result_list and isinstance(result_list, list) and len(result_list) > 0:
+                    if all(isinstance(item, dict) and "data" in item and "labels" in item for item in result_list):
+                        mock_insight["generic_series_data"] = []
+                        for i, item_res in enumerate(result_list):
+                            action_info = item_res.get("action", {})
+                            series_name = action_info.get("custom_name", item_res.get("label", f"Series {i+1}"))
+                            mock_insight["generic_series_data"].append({
+                                "series_name": series_name,
+                                "event": action_info.get("name"),
+                                "math_operation": action_info.get("math"),
+                                "math_property": action_info.get("math_property"),
+                                "data_points": item_res.get("data", []),
+                                "labels": item_res.get("labels", []),
+                                "days": item_res.get("days", [])
+                            })
+                        if mock_insight["generic_series_data"]:
+                            mock_insight["series_names"] = [s["series_name"] for s in mock_insight["generic_series_data"]]
+                
+                if not mock_insight.get("generic_series_data") and not mock_insight.get("series_data"):
+                    mock_insight["raw_result"] = result_list
+            
+            # Format the single insight using the existing formatter
+            combined_data = {
+                "all_insights": [mock_insight],
+                "all_insights_images": {}
+            }
+            formatted_insight = self.client._format_combined_dashboard_data(combined_data)
+            
+            # Return formatted data
+            return {
+                "insight_id": raw_data.get("id"),
+                "insight_name": mock_insight.get("name"),
+                "insight_type": mock_insight.get("type"),
+                "formatted_insight": formatted_insight,
+                "raw_data": raw_data  # Keep raw data for backward compatibility
+            }
+        
+        return raw_data
     
     def get_dashboard_data(self, dashboard_name: str, days: int = 7) -> Dict:
-        """Get all data for a dashboard including all insights."""
+        """Get all data for a dashboard including all insights with formatted, AI-readable output."""
         self._check_client()
-        return self.client.get_dashboard_data(dashboard_name, days)
+        raw_data = self.client.get_dashboard_data(dashboard_name, days)
+        
+        # Apply formatting to make data more interpretable for AI
+        if "insights" in raw_data:
+            combined_data = {
+                "all_insights": raw_data.get("insights", []),
+                "all_insights_images": raw_data.get("insights_images", {})
+            }
+            formatted_insights = self.client._format_combined_dashboard_data(combined_data)
+            
+            # Return formatted data along with metadata
+            return {
+                "dashboard_id": raw_data.get("dashboard_id"),
+                "dashboard_name": raw_data.get("dashboard_name"),
+                "date": raw_data.get("date"),
+                "period": raw_data.get("period"),
+                "formatted_insights": formatted_insights,
+                "insights_images": raw_data.get("insights_images", {}),
+                "total_insights_count": len(raw_data.get("insights", [])),
+                "raw_data": raw_data  # Keep raw data for backward compatibility
+            }
+        
+        return raw_data
     
     async def get_dashboard_screenshot(self, dashboard_id: str, context_id: str = None) -> Union[bytes, str, Dict]:
         """

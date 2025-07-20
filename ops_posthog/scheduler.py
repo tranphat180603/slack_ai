@@ -65,13 +65,13 @@ class PosthogScheduler:
             logger.error(f"Error in daily alert for {dashboard_name}: {str(e)}")
     
     async def send_weekly_report(self):
-        """Generate and send a weekly report for all dashboards."""
+        """Generate and send a weekly report for all configured channels."""
         try:
             logger.info("Generating weekly report")
             self.initialize_clients()
             
-            dashboard_names = list(self.dashboards.values())
-            success = await self.slack_reporter.send_weekly_report(dashboard_names)
+            # Call send_weekly_report without arguments to send to all configured channels
+            success = await self.slack_reporter.send_weekly_report()
             
             if success:
                 logger.info("Weekly report completed successfully")
