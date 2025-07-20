@@ -149,6 +149,212 @@ class SlackClient:
             return users_list
 
     
+    def search_workspace_messages(self, query: str, limit: int = 50, channels: List[str] = None) -> Dict[str, Any]:
+        """
+        Search messages across entire workspace with query.
+        
+        Args:
+            query: Search query string
+            limit: Maximum number of results
+            channels: Optional list of channel IDs to search in
+            
+        Returns:
+            Dictionary with search results
+        """
+        try:
+            search_params = {
+                "query": query,
+                "count": min(limit, 100),
+                "sort": "timestamp"
+            }
+            
+            response = self.client.search_messages(**search_params)
+            
+            if response.get("ok"):
+                messages = response.get("messages", {}).get("matches", [])
+                
+                # Filter by channels if specified
+                if channels:
+                    messages = [msg for msg in messages if msg.get("channel", {}).get("id") in channels]
+                
+                return {
+                    "messages": messages,
+                    "count": len(messages),
+                    "query": query
+                }
+            else:
+                return {"messages": [], "count": 0, "error": response.get("error")}
+                
+        except Exception as e:
+            logger.error(f"Error searching workspace messages: {str(e)}")
+            return {"messages": [], "count": 0, "error": str(e)}
+    
+    def search_files(self, query: str, file_types: List[str] = None, limit: int = 20) -> List[Dict]:
+        """
+        Search files across workspace.
+        
+        Args:
+            query: Search query
+            file_types: Optional file type filters
+            limit: Maximum results
+            
+        Returns:
+            List of file objects
+        """
+        try:
+            search_params = {
+                "query": f"type:file {query}",
+                "count": min(limit, 100)
+            }
+            
+            response = self.client.search_files(**search_params)
+            
+            if response.get("ok"):
+                files = response.get("files", {}).get("matches", [])
+                
+                # Filter by file types if specified
+                if file_types:
+                    files = [f for f in files if f.get("filetype") in file_types]
+                
+                return files
+            else:
+                logger.error(f"File search failed: {response.get('error')}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error searching files: {str(e)}")
+            return []
+    
+    def get_workspace_channels(self, include_private: bool = False, channel_types: List[str] = None) -> List[Dict]:
+        """
+        Get all workspace channels.
+        
+        Args:
+            include_private: Include private channels
+            channel_types: Filter by channel types
+            
+        Returns:
+            List of channel objects
+        """
+        try:
+            params = {"exclude_archived": True}
+            if include_private:
+                params["types"] = "public_channel,private_channel"
+            
+            response = self.client.conversations_list(**params)
+            
+            if response.get("ok"):
+                channels = response.get("channels", [])
+                
+                # Filter by types if specified
+                if channel_types:
+                    channels = [c for c in channels if c.get("is_channel") and any(t in str(c) for t in channel_types)]
+                
+                return channels
+            else:
+                logger.error(f"Channel list failed: {response.get('error')}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error getting channels: {str(e)}")
+            return []
+    
+    def extract_action_items(self, channel_id: str, days: int = 7) -> List[Dict]:
+        """
+        Extract action items from recent conversations.
+        
+        Args:
+            channel_id: Channel to analyze
+            days: Days to look back
+            
+        Returns:
+            List of potential action items
+        """
+        try:
+            # Get recent messages
+            from datetime import datetime, timedelta
+            oldest = (datetime.now() - timedelta(days=days)).timestamp()
+            
+            response = self.client.conversations_history(
+                channel=channel_id,
+                oldest=str(oldest),
+                limit=200
+            )
+            
+            if not response.get("ok"):
+                return []
+            
+            messages = response.get("messages", [])
+            action_items = []
+            
+            # Simple pattern matching for action items
+            action_patterns = [
+                r"(?i)\b(todo|to do|action item|follow up|need to|should|must|will)\b.*",
+                r"(?i)\b(assign|assigned|responsible for)\b.*",
+                r"(?i)@\w+.*\b(please|can you|could you)\b.*"
+            ]
+            
+            for msg in messages:
+                text = msg.get("text", "")
+                for pattern in action_patterns:
+                    import re
+                    if re.search(pattern, text):
+                        action_items.append({
+                            "text": text,
+                            "user": msg.get("user"),
+                            "timestamp": msg.get("ts"),
+                            "channel": channel_id
+                        })
+                        break
+            
+            return action_items[:20]  # Limit results
+            
+        except Exception as e:
+            logger.error(f"Error extracting action items: {str(e)}")
+            return []
+    
+    def get_trending_topics(self, time_range: str = "7d", limit: int = 10) -> List[Dict]:
+        """
+        Identify trending discussion topics.
+        
+        Args:
+            time_range: Time range to analyze
+            limit: Number of topics to return
+            
+        Returns:
+            List of trending topics
+        """
+        try:
+            # Simple implementation - get popular channels by message count
+            channels = self.get_workspace_channels()
+            trending = []
+            
+            for channel in channels[:20]:  # Limit to avoid rate limits
+                try:
+                    response = self.client.conversations_history(
+                        channel=channel["id"],
+                        limit=100
+                    )
+                    
+                    if response.get("ok"):
+                        msg_count = len(response.get("messages", []))
+                        trending.append({
+                            "channel_id": channel["id"],
+                            "channel_name": channel.get("name"),
+                            "message_count": msg_count,
+                            "topic": channel.get("topic", {}).get("value", "")
+                        })
+                except:
+                    continue
+            
+            # Sort by activity
+            trending.sort(key=lambda x: x["message_count"], reverse=True)
+            return trending[:limit]
+            
+        except Exception as e:
+            logger.error(f"Error getting trending topics: {str(e)}")
+            return []
+    
     def extract_urls(self, text: str) -> List[str]:
         """
         Extract URLs from text.
@@ -693,8 +899,6 @@ class SlackClient:
                 "error": str(e.response['error'])
                 
             }
-        
-
 
 if __name__ == "__main__":
     import os

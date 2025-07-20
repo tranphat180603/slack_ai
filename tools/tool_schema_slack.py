@@ -155,9 +155,133 @@ GET_CONVERSATION_CONTEXT_SCHEMA = {
 
 
 
+# Schema for workspace message search
+SEARCH_WORKSPACE_MESSAGES_SCHEMA = {
+    "type": "function",
+    "name": "search_workspace_messages",
+    "description": "Search messages across entire Slack workspace with advanced filtering. Use this for finding specific content, discussions, or mentions across all channels you have access to.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search query string. Can include keywords, phrases, or Slack search operators."
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum number of results to return (1-100). Default is 50."
+            },
+            "channels": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional list of channel IDs to limit search to specific channels."
+            }
+        },
+        "required": ["query"],
+        "additionalProperties": False
+    }
+}
+
+# Schema for file search
+SEARCH_FILES_SCHEMA = {
+    "type": "function",
+    "name": "search_files",
+    "description": "Search for files across the entire Slack workspace. Find documents, images, and other attachments by name or content.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search query for file names or content."
+            },
+            "file_types": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional filter by file types (e.g., ['pdf', 'doc', 'png'])."
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum number of files to return (1-100). Default is 20."
+            }
+        },
+        "required": ["query"],
+        "additionalProperties": False
+    }
+}
+
+# Schema for getting workspace channels
+GET_WORKSPACE_CHANNELS_SCHEMA = {
+    "type": "function",
+    "name": "get_workspace_channels",
+    "description": "Get list of all channels in the workspace with metadata. Useful for discovering channels and understanding workspace structure.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "include_private": {
+                "type": "boolean",
+                "description": "Whether to include private channels (if you have access). Default is False."
+            },
+            "channel_types": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional filter by channel types."
+            }
+        },
+        "additionalProperties": False
+    }
+}
+
+# Schema for extracting action items
+EXTRACT_ACTION_ITEMS_SCHEMA = {
+    "type": "function",
+    "name": "extract_action_items",
+    "description": "Extract potential action items from recent channel conversations. Identifies messages that contain tasks, assignments, or follow-ups.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "channel_id": {
+                "type": "string",
+                "description": "Channel ID to analyze for action items."
+            },
+            "days": {
+                "type": "integer",
+                "description": "Number of days to look back (1-30). Default is 7."
+            }
+        },
+        "required": ["channel_id"],
+        "additionalProperties": False
+    }
+}
+
+# Schema for trending topics
+GET_TRENDING_TOPICS_SCHEMA = {
+    "type": "function",
+    "name": "get_trending_topics",
+    "description": "Identify trending discussion topics across the workspace based on message activity and channel engagement.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "time_range": {
+                "type": "string",
+                "description": "Time range to analyze (e.g., '7d', '30d'). Default is '7d'."
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Number of trending topics to return. Default is 10."
+            }
+        },
+        "additionalProperties": False
+    }
+}
+
 # Collection of all Slack schemas
 SLACK_SCHEMAS = {
     "search_channel_history": SEARCH_CHANNEL_HISTORY_SCHEMA,
     "get_user": GET_USER_SCHEMA,
-    "get_conversation_context": GET_CONVERSATION_CONTEXT_SCHEMA
+    "get_conversation_context": GET_CONVERSATION_CONTEXT_SCHEMA,
+    "search_workspace_messages": SEARCH_WORKSPACE_MESSAGES_SCHEMA,
+    "search_files": SEARCH_FILES_SCHEMA,
+    "get_workspace_channels": GET_WORKSPACE_CHANNELS_SCHEMA,
+    "extract_action_items": EXTRACT_ACTION_ITEMS_SCHEMA,
+    "get_trending_topics": GET_TRENDING_TOPICS_SCHEMA
 } 

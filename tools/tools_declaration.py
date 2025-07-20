@@ -1460,6 +1460,31 @@ class SlackTools:
         self._check_client()
         return self.client.get_current_user(display_name)
         
+    def search_workspace_messages(self, query: str, limit: int = 50, channels: List[str] = None) -> Dict[str, Any]:
+        """Search messages across entire workspace"""
+        self._check_client()
+        return self.client.search_workspace_messages(query=query, limit=limit, channels=channels)
+    
+    def search_files(self, query: str, file_types: List[str] = None, limit: int = 20) -> List[Dict]:
+        """Search files across workspace"""
+        self._check_client()
+        return self.client.search_files(query=query, file_types=file_types, limit=limit)
+    
+    def get_workspace_channels(self, include_private: bool = False, channel_types: List[str] = None) -> List[Dict]:
+        """Get all workspace channels"""
+        self._check_client()
+        return self.client.get_workspace_channels(include_private=include_private, channel_types=channel_types)
+    
+    def extract_action_items(self, channel_id: str, days: int = 7) -> List[Dict]:
+        """Extract action items from channel conversations"""
+        self._check_client()
+        return self.client.extract_action_items(channel_id=channel_id, days=days)
+    
+    def get_trending_topics(self, time_range: str = "7d", limit: int = 10) -> List[Dict]:
+        """Get trending discussion topics"""
+        self._check_client()
+        return self.client.get_trending_topics(time_range=time_range, limit=limit)
+    
     async def get_conversation_context(self, max_messages: int = 10) -> List[str]:
         """
         Get conversation context for the current conversation.

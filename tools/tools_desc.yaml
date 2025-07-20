@@ -219,18 +219,45 @@ posthog_tools:
           - insight_id
 
 slack_tools:
-  - category: "Slack communication tools"
+  - category: "EXPLORE: Basic Slack workspace discovery tools"
     tools:
       - name: get_conversation_context
-        description: Get the conversation context for the current chat session. Use this function to return the full conversation history of the current chat session, in case you want to refer to previous messages for important information as the history context you get at the beginning is just a truncated version. Limit by the number of messages you want to retrieve.
+        description: Get the conversation context for the current chat session. Use this function to return the full conversation history of the current chat session, in case you want to refer to previous messages for important information as the history context you get at the beginning is just a truncated version.
         inputs:
           max_messages: "Maximum number of messages to retrieve from the conversation history. Default is 10. Use a larger number (e.g., 20-30) for longer context, or a smaller number (e.g., 5) for just recent messages."
         outputs: "Array of formatted message strings"
         required_inputs:
           - max_messages
 
+      - name: get_user
+        description: "Get user information for every employee in the company or a specific employee. By providing their display name, you can get the user's information. Or return all users if no display name is provided."
+        inputs:
+          display_name: "The display name of the employee to search for (e.g. '@username')"
+        outputs: "Array of Slack user objects with metadata"
+        required_inputs: []
+
+      - name: get_workspace_channels
+        description: "Discover all channels in the workspace with metadata. Useful for understanding workspace structure and finding relevant channels."
+        inputs:
+          include_private: "Whether to include private channels (if you have access)"
+          channel_types: "Optional filter by channel types"
+        outputs: "Array of channel objects with metadata"
+        required_inputs: []
+
+  - category: "SEARCH: Advanced search tools for finding content across workspace"
+    tools:
+      - name: search_workspace_messages
+        description: "Search messages across entire Slack workspace with advanced filtering. Use this for finding specific content, discussions, or mentions across all channels you have access to."
+        inputs:
+          query: "Search query string. Can include keywords, phrases, or Slack search operators"
+          limit: "Maximum number of results to return (1-100). Default is 50"
+          channels: "Optional list of channel IDs to limit search to specific channels"
+        outputs: "Array of matching messages with metadata from across the workspace"
+        required_inputs:
+          - query
+
       - name: search_channel_history
-        description: Search Slack channel history with specific filters to find relevant messages
+        description: Search Slack channel history with specific filters to find relevant messages in a particular channel
         inputs:
           channel_id: "The ID of the Slack channel to search (e.g., 'C01234ABCDE')"
           username: "Filter messages by a specific username"
@@ -241,11 +268,33 @@ slack_tools:
         required_inputs:
           - channel_id
 
-      - name: get_user
-        description: "Get user information for every employee in the company or a specific employee. By providing their display name, you can get the user's information. Or return all users if no display name is provided."
+      - name: search_files
+        description: "Search for files across the entire Slack workspace. Find documents, images, and other attachments by name or content."
         inputs:
-          display_name: "The display name of the employee to search for (e.g. '@username')"
-        outputs: "Array of Slack user objects with metadata"
+          query: "Search query for file names or content"
+          file_types: "Optional filter by file types (e.g., ['pdf', 'doc', 'png'])"
+          limit: "Maximum number of files to return (1-100). Default is 20"
+        outputs: "Array of file objects with metadata"
+        required_inputs:
+          - query
+
+  - category: "INTELLIGENCE: AI-powered content analysis tools"
+    tools:
+      - name: extract_action_items
+        description: "Extract potential action items from recent channel conversations. Identifies messages that contain tasks, assignments, or follow-ups."
+        inputs:
+          channel_id: "Channel ID to analyze for action items"
+          days: "Number of days to look back (1-30). Default is 7"
+        outputs: "Array of potential action items with context"
+        required_inputs:
+          - channel_id
+
+      - name: get_trending_topics
+        description: "Identify trending discussion topics across the workspace based on message activity and channel engagement."
+        inputs:
+          time_range: "Time range to analyze (e.g., '7d', '30d'). Default is '7d'"
+          limit: "Number of trending topics to return. Default is 10"
+        outputs: "Array of trending topics with activity metrics"
         required_inputs: []
 
 website_tools:

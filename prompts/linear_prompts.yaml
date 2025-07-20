@@ -20,6 +20,7 @@ linear:
         - Level 1 contains functions that can be executed immediately with no dependencies.
         - Level 2 contains functions that depend on results from Level 1, and so on
         - Functions within the same level should be independent of each other and can be executed in parallel
+        - For each level, we can only have a maximum of 3 functions, no more
 
         Return a JSON response with the following fields without additional text and any kind of comments in the JSON response:
         {
