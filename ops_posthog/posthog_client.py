@@ -1168,7 +1168,7 @@ def main():
     # Set up argument parser
     parser = argparse.ArgumentParser(description='Explore Posthog data')
     parser.add_argument('--action', choices=['list_dashboards', 'dashboard_details', 'insight_data', 
-                                          'daily_report', 'weekly_report', 'ai_daily_insights', 'ai_weekly_insights', 'export_dashboard_screenshots', 'test_date_and_week_range'],
+                                          'daily_report', 'weekly_report', 'ai_daily_insights', 'ai_weekly_insights', 'export_dashboard_screenshots', 'test_date_and_week_range', 'debug_dashboard'],
                         default='list_dashboards', help='Action to perform')
     parser.add_argument('--dashboard', type=str, help='Dashboard name')
     parser.add_argument('--insight', type=str, help='Insight ID')
@@ -1295,6 +1295,104 @@ def main():
             
         print(f"\nExporting screenshots for {args.dashboard} to screenshots/ directory:")
         saved_paths = posthog_client.save_dashboard_screenshots(args.dashboard, "screenshots")
+    
+    elif args.action == 'debug_dashboard':
+        dashboard_name = args.dashboard or "Moonshot Analytics"
+        print(f"\n🔍 DEBUGGING DASHBOARD: {dashboard_name}")
+        print("=" * 80)
+        
+        # Test 1: Check if dashboard exists
+        print("\n1. Testing dashboard existence...")
+        dashboard = posthog_client.get_dashboard_by_name(dashboard_name)
+        if dashboard:
+            print(f"✅ Dashboard found: ID {dashboard.get('id')}, Name: '{dashboard.get('name')}'")
+        else:
+            print(f"❌ Dashboard '{dashboard_name}' not found")
+            
+            # List all available dashboards
+            print("\n📋 Available dashboards:")
+            all_dashboards = posthog_client.get_dashboards()
+            for dash in all_dashboards:
+                print(f"  - '{dash.get('name')}' (ID: {dash.get('id')})")
+            return
+        
+        # Test 2: Get dashboard items
+        print(f"\n2. Testing dashboard items...")
+        dashboard_id = dashboard.get('id')
+        items = posthog_client.get_dashboard_items(dashboard_id)
+        print(f"✅ Found {len(items)} items in dashboard")
+        
+        for i, item in enumerate(items):
+            insight_info = item.get("insight", {}) if "insight" in item else item
+            print(f"  Item {i+1}: '{insight_info.get('name', 'Unnamed')}' (ID: {insight_info.get('id')})")
+        
+        # Test 3: Get full dashboard data with formatting
+        print(f"\n3. Testing dashboard data retrieval...")
+        dashboard_data = posthog_client.get_dashboard_data(dashboard_name, days=7)
+        
+        if "error" in dashboard_data:
+            print(f"❌ Error getting dashboard data: {dashboard_data['error']}")
+            return
+        
+        print(f"✅ Dashboard data retrieved successfully")
+        print(f"  - Dashboard ID: {dashboard_data.get('dashboard_id')}")
+        print(f"  - Date: {dashboard_data.get('date')}")
+        print(f"  - Period: {dashboard_data.get('period')}")
+        print(f"  - Number of insights: {len(dashboard_data.get('insights', []))}")
+        print(f"  - Number of images: {len(dashboard_data.get('insights_images', {}))}")
+        
+        # Test 4: Show detailed insight information
+        print(f"\n4. Detailed insight analysis...")
+        insights = dashboard_data.get('insights', [])
+        for i, insight in enumerate(insights):
+            print(f"\n  Insight {i+1}: {insight.get('name', 'Unnamed')}")
+            print(f"    Type: {insight.get('type', 'Unknown')}")
+            print(f"    Description: {insight.get('description', 'No description')[:100]}...")
+            
+            if insight.get('type') == 'TrendsQuery' and insight.get('series_data'):
+                print(f"    Series: {len(insight['series_data'])} series")
+                for j, series in enumerate(insight['series_data'][:2]):  # Show first 2 series
+                    data_points = len(series.get('data_points', []))
+                    print(f"      Series {j+1}: '{series.get('series_name', 'Unknown')}' - {data_points} data points")
+                    if series.get('data_points'):
+                        latest_values = series['data_points'][-3:]  # Show last 3 values
+                        print(f"        Latest values: {latest_values}")
+            
+            elif insight.get('type') == 'RetentionQuery' and insight.get('cohorts'):
+                print(f"    Retention: {len(insight['cohorts'])} cohorts")
+                
+            elif insight.get('type') == 'LifecycleQuery' and insight.get('lifecycle_stages'):
+                print(f"    Lifecycle: {len(insight['lifecycle_stages'])} stages")
+                
+            elif insight.get('raw_result'):
+                print(f"    Raw result: {str(insight['raw_result'])[:100]}...")
+        
+        # Test 5: Test formatted data
+        print(f"\n5. Testing formatted data for AI...")
+        combined_data = {
+            "all_insights": dashboard_data.get("insights", []),
+            "all_insights_images": dashboard_data.get("insights_images", {})
+        }
+        formatted_data = posthog_client._format_combined_dashboard_data(combined_data)
+        
+        print(f"✅ Formatted data length: {len(formatted_data)} characters")
+        print(f"\n📝 Formatted data preview (first 800 chars):")
+        print("-" * 50)
+        print(formatted_data[:800] + "..." if len(formatted_data) > 800 else formatted_data)
+        
+        # Test 6: Test weekly report generation
+        print(f"\n6. Testing weekly report generation...")
+        try:
+            weekly_report = posthog_client.generate_weekly_report([dashboard_name])
+            print(f"✅ Weekly report generated successfully")
+            print(f"\n📊 Weekly Report (first 500 chars):")
+            print("-" * 50)
+            print(weekly_report[:500] + "..." if len(weekly_report) > 500 else weekly_report)
+        except Exception as e:
+            print(f"❌ Error generating weekly report: {str(e)}")
+        
+        print(f"\n🎉 DEBUGGING COMPLETE")
+        print("=" * 80)
             
 
 if __name__ == "__main__":

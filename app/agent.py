@@ -1231,6 +1231,11 @@ class Soldier:
                 "search_channel_history": slack_tools.search_channel_history,
                 "get_user": slack_tools.get_user,
                 "get_conversation_context": slack_tools.get_conversation_context,
+                "search_workspace_messages": slack_tools.search_workspace_messages,
+                "search_files": slack_tools.search_files,
+                "get_workspace_channels": slack_tools.get_workspace_channels,
+                "extract_action_items": slack_tools.extract_action_items,
+                "get_trending_topics": slack_tools.get_trending_topics,
 
                 # Website tools
                 "search_website_content": website_tools.search_website_content,

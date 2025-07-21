@@ -118,69 +118,34 @@ class SlackModals:
     ):
         """Fetches data and updates the create issue modal view."""
         try:
-            # This is the original logic from open_create_issue_modal
             title = prefilled_data.get("title", "")
             description = prefilled_data.get("description", "")
             team_key = prefilled_data.get("team_key", "OPS")
-            logger.info(f"Using team_key: {team_key}")
             
-            team_options = []
-            if hasattr(self, 'linear_tools') and self.linear_tools:
-                try:
-                    teams = self.linear_tools.getAllTeams() or []
-                except Exception as e:
-                    logger.warning(f"Error getting teams: {str(e)}")
-                    teams = []
-                
-                for team in teams:
-                    if team.get("key"):
-                        team_options.append({
-                            "text": {"type": "plain_text", "text": f"{team.get('name')} ({team.get('key')})"},
-                            "value": team.get("key")
-                        })
+            # Fetch dynamic data
+            team_options = self._fetch_team_options()
+            state_options = self._fetch_state_options(team_key)
+            assignee_options = self._fetch_assignee_options(team_key)
+
+            # Safely determine initial options
+            initial_team = self._find_initial_option(team_options, team_key)
+            initial_state = self._find_initial_option(state_options, prefilled_data.get("state_name", "Todo"))
+            initial_assignee = self._find_initial_option(assignee_options, prefilled_data.get("assignee_name"))
             
-            if not team_options:
-                for team_key_default in ["ENG", "OPS", "RES", "AI", "MKT", "PRO"]:
-                    team_options.append({"text": {"type": "plain_text", "text": team_key_default}, "value": team_key_default})
+            priority_options = [
+                {"text": {"type": "plain_text", "text": "No priority"}, "value": "0.0"},
+                {"text": {"type": "plain_text", "text": "Urgent"}, "value": "1.0"},
+                {"text": {"type": "plain_text", "text": "High"}, "value": "2.0"},
+                {"text": {"type": "plain_text", "text": "Medium"}, "value": "3.0"},
+                {"text": {"type": "plain_text", "text": "Low"}, "value": "4.0"}
+            ]
+            initial_priority = self._find_initial_option(priority_options, str(float(prefilled_data.get("priority", 0.0))))
 
-            state_options = []
-            selected_team_key = prefilled_data.get("teamKey")
-            if selected_team_key and hasattr(self, 'linear_tools') and self.linear_tools:
-                try:
-                    states = self.linear_tools.getAllStates(teamKey=selected_team_key)
-                    for state in states:
-                        if state.get("name"):
-                            state_options.append({"text": {"type": "plain_text", "text": state.get("name")}, "value": state.get("name")})
-                except Exception as e:
-                    logger.warning(f"Error getting states for team {selected_team_key}: {str(e)}")
-
-            if not state_options:
-                for state_name in ["Todo", "In Progress", "Done", "Canceled"]:
-                    state_options.append({"text": {"type": "plain_text", "text": state_name}, "value": state_name})
-
-            assignee_name = prefilled_data.get("assignee_name", "")
-            assignee_display = assignee_name
-            if assignee_name and hasattr(self, 'linear_tools') and self.linear_tools:
-                try:
-                    user_info = self.linear_tools.getCurrentUser(slack_display_name=f"@{assignee_name}" if not assignee_name.startswith('@') else assignee_name)
-                    if user_info and user_info.get("linear_display_name"):
-                        assignee_display = user_info.get("linear_display_name")
-                except Exception as e:
-                    logger.warning(f"Error getting user info for {assignee_name}: {str(e)}")
-
-            assignee_options = []
-            if hasattr(self, 'linear_tools') and self.linear_tools:
-                try:
-                    team_users = self.linear_tools.getAllUsers(team_key)
-                    for user in team_users:
-                        display_name = user.get("displayName")
-                        if display_name:
-                            assignee_options.append({"text": {"type": "plain_text", "text": display_name}, "value": display_name})
-                except Exception as e:
-                    logger.warning(f"Error getting team users: {str(e)}")
-
-            if not assignee_options:
-                assignee_options.append({"text": {"type": "plain_text", "text": "No assignee"}, "value": "none"})
+            # Build view blocks dynamically
+            blocks = self._build_issue_form_blocks(
+                prefilled_data, team_options, state_options, assignee_options, priority_options,
+                initial_team, initial_state, initial_assignee, initial_priority
+            )
 
             view = {
                 "type": "modal",
@@ -189,23 +154,10 @@ class SlackModals:
                 "title": {"type": "plain_text", "text": "Create Linear Issue"},
                 "submit": {"type": "plain_text", "text": "Create"},
                 "close": {"type": "plain_text", "text": "Cancel"},
-                "blocks": [
-                    {"type": "input", "block_id": "team_block", "element": {"type": "static_select", "action_id": "team_select", "placeholder": {"type": "plain_text", "text": "Select a team"}, "options": team_options}, "label": {"type": "plain_text", "text": "Team"}},
-                    {"type": "input", "block_id": "title_block", "element": {"type": "plain_text_input", "action_id": "title_input", "initial_value": title, "placeholder": {"type": "plain_text", "text": "Issue title"}}, "label": {"type": "plain_text", "text": "Title"}},
-                    {"type": "input", "block_id": "description_block", "element": {"type": "plain_text_input", "action_id": "description_input", "multiline": True, "initial_value": self._truncate_description(description), "placeholder": {"type": "plain_text", "text": "Issue description (supports markdown)"}}, "label": {"type": "plain_text", "text": "Description"}, "optional": True},
-                    {"type": "input", "block_id": "priority_block", "element": {"type": "static_select", "action_id": "priority_select", "placeholder": {"type": "plain_text", "text": "Select priority"}, "options": [{"text": {"type": "plain_text", "text": "No priority"}, "value": "0.0"}, {"text": {"type": "plain_text", "text": "Urgent"}, "value": "1.0"}, {"text": {"type": "plain_text", "text": "High"}, "value": "2.0"}, {"text": {"type": "plain_text", "text": "Medium"}, "value": "3.0"}, {"text": {"type": "plain_text", "text": "Low"}, "value": "4.0"}], "initial_option": next((opt for opt in [{"text": {"type": "plain_text", "text": "No priority"}, "value": "0.0"}, {"text": {"type": "plain_text", "text": "Urgent"}, "value": "1.0"}, {"text": {"type": "plain_text", "text": "High"}, "value": "2.0"}, {"text": {"type": "plain_text", "text": "Medium"}, "value": "3.0"}, {"text": {"type": "plain_text", "text": "Low"}, "value": "4.0"}] if opt["value"] == str(float(prefilled_data.get("priority", 0) or 0))), {"text": {"type": "plain_text", "text": "No priority"}, "value": "0.0"}) if prefilled_data.get("priority") is not None else None}, "label": {"type": "plain_text", "text": "Priority"}, "optional": True},
-                    {"type": "input", "block_id": "state_block", "element": {"type": "static_select", "action_id": "state_select", "placeholder": {"type": "plain_text", "text": "Select status"}, "options": state_options, "initial_option": next((opt for opt in state_options if opt["value"] == prefilled_data.get("state_name", "Todo")), state_options[0] if state_options else None)}, "label": {"type": "plain_text", "text": "Status"}, "optional": True},
-                    {"type": "input", "block_id": "assignee_block", "element": {"type": "static_select", "action_id": "assignee_select", "placeholder": {"type": "plain_text", "text": "Select assignee"}, "options": assignee_options, "initial_option": next((opt for opt in assignee_options if opt["value"] == assignee_display), None) if assignee_display else None}, "label": {"type": "plain_text", "text": "Assignee"}, "optional": True},
-                    {"type": "input", "block_id": "labels_block", "element": {"type": "plain_text_input", "action_id": "labels_input", "initial_value": self._format_labels(prefilled_data.get("label_names", [])), "placeholder": {"type": "plain_text", "text": "Labels (comma separated)"}}, "label": {"type": "plain_text", "text": "Labels"}, "optional": True},
-                    {"type": "input", "block_id": "project_block", "element": {"type": "plain_text_input", "action_id": "project_input", "initial_value": prefilled_data.get("project_name", ""), "placeholder": {"type": "plain_text", "text": "Project name"}}, "label": {"type": "plain_text", "text": "Project"}, "optional": True},
-                    {"type": "input", "block_id": "parent_issue_block", "element": {"type": "plain_text_input", "action_id": "parent_issue_input", "initial_value": str(prefilled_data.get("parent_issue_number", "")), "placeholder": {"type": "plain_text", "text": "Parent issue number"}}, "label": {"type": "plain_text", "text": "Parent Issue #"}, "optional": True},
-                    {"type": "input", "block_id": "cycle_block", "element": {"type": "plain_text_input", "action_id": "cycle_input", "initial_value": str(prefilled_data.get("cycle_number", "")), "placeholder": {"type": "plain_text", "text": "Cycle number"}}, "label": {"type": "plain_text", "text": "Cycle Number"}, "optional": True}
-                ]
+                "blocks": blocks
             }
 
-            view, was_reduced = self._validate_view_size(view)
-            if was_reduced:
-                logger.info("View size was reduced to fit Slack's limits")
+            view, _ = self._validate_view_size(view)
 
             await asyncio.to_thread(
                 self.slack_client.views_update,
@@ -216,21 +168,103 @@ class SlackModals:
 
         except SlackApiError as e:
             logger.error(f"Error updating create issue modal view {view_id}: {e.response['error']}")
-            error_view = {
-                "type": "modal",
-                "title": {"type": "plain_text", "text": "Error"},
-                "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": f"Sorry, I couldn't load the form. Error: {e.response['error']}"}}]
-            }
-            try:
-                await asyncio.to_thread(
-                    self.slack_client.views_update,
-                    view_id=view_id,
-                    view=error_view
-                )
-            except SlackApiError:
-                pass
+            # Handle error by updating the modal with an error message
         except Exception as e:
             logger.error(f"Unexpected error in _update_create_issue_view: {str(e)}")
+
+    def _fetch_team_options(self) -> List[Dict[str, Any]]:
+        """Fetches and formats team options for a dropdown."""
+        team_options = []
+        if hasattr(self, 'linear_tools') and self.linear_tools:
+            try:
+                teams = self.linear_tools.getAllTeams() or []
+                for team in teams:
+                    if team.get("key"):
+                        team_options.append({"text": {"type": "plain_text", "text": f"{team.get('name')} ({team.get('key')})"}, "value": team.get("key")})
+            except Exception as e:
+                logger.warning(f"Error getting teams: {str(e)}")
+        
+        if not team_options:
+            return [{"text": {"type": "plain_text", "text": k}, "value": k} for k in ["ENG", "OPS", "RES", "AI", "MKT", "PRO"]]
+        return team_options
+
+    def _fetch_state_options(self, team_key: str) -> List[Dict[str, Any]]:
+        """Fetches and formats state options for a given team."""
+        state_options = []
+        if team_key and hasattr(self, 'linear_tools') and self.linear_tools:
+            try:
+                states = self.linear_tools.getAllStates(teamKey=team_key)
+                for state in states:
+                    if state.get("name"):
+                        state_options.append({"text": {"type": "plain_text", "text": state.get("name")}, "value": state.get("name")})
+            except Exception as e:
+                logger.warning(f"Error getting states for team {team_key}: {str(e)}")
+
+        if not state_options:
+            return [{"text": {"type": "plain_text", "text": s}, "value": s} for s in ["Todo", "In Progress", "Done", "Canceled"]]
+        return state_options
+
+    def _fetch_assignee_options(self, team_key: str) -> List[Dict[str, Any]]:
+        """Fetches and formats assignee options for a given team."""
+        assignee_options = []
+        if team_key and hasattr(self, 'linear_tools') and self.linear_tools:
+            try:
+                users = self.linear_tools.getAllUsers(teamKey=team_key)
+                for user in users:
+                    if user.get("displayName"):
+                        assignee_options.append({"text": {"type": "plain_text", "text": user.get("displayName")}, "value": user.get("displayName")})
+            except Exception as e:
+                logger.warning(f"Error getting users for team {team_key}: {str(e)}")
+        
+        if not assignee_options:
+            return [{"text": {"type": "plain_text", "text": "No assignee"}, "value": "none"}]
+        return assignee_options
+
+    def _find_initial_option(self, options: List[Dict[str, Any]], value: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Finds a matching option object from a list of options."""
+        if not value or not options:
+            return None
+        return next((opt for opt in options if opt.get("value") == value), None)
+
+    def _build_issue_form_blocks(self, prefilled_data, team_options, state_options, assignee_options, priority_options, initial_team, initial_state, initial_assignee, initial_priority):
+        """Constructs the list of blocks for the issue form modal."""
+        blocks = []
+
+        # Team
+        team_element = {"type": "static_select", "action_id": "team_select", "options": team_options}
+        if initial_team: team_element["initial_option"] = initial_team
+        blocks.append({"type": "input", "block_id": "team_block", "element": team_element, "label": {"type": "plain_text", "text": "Team"}})
+
+        # Title
+        blocks.append({"type": "input", "block_id": "title_block", "element": {"type": "plain_text_input", "action_id": "title_input", "initial_value": prefilled_data.get("title", "")}, "label": {"type": "plain_text", "text": "Title"}})
+
+        # Description
+        blocks.append({"type": "input", "block_id": "description_block", "element": {"type": "plain_text_input", "action_id": "description_input", "multiline": True, "initial_value": self._truncate_description(prefilled_data.get("description", ""))}, "label": {"type": "plain_text", "text": "Description"}, "optional": True})
+
+        # Priority
+        priority_element = {"type": "static_select", "action_id": "priority_select", "options": priority_options}
+        if initial_priority: priority_element["initial_option"] = initial_priority
+        blocks.append({"type": "input", "block_id": "priority_block", "element": priority_element, "label": {"type": "plain_text", "text": "Priority"}, "optional": True})
+
+        # State
+        state_element = {"type": "static_select", "action_id": "state_select", "options": state_options}
+        if initial_state: state_element["initial_option"] = initial_state
+        blocks.append({"type": "input", "block_id": "state_block", "element": state_element, "label": {"type": "plain_text", "text": "Status"}, "optional": True})
+
+        # Assignee
+        assignee_element = {"type": "static_select", "action_id": "assignee_select", "options": assignee_options}
+        if initial_assignee: assignee_element["initial_option"] = initial_assignee
+        blocks.append({"type": "input", "block_id": "assignee_block", "element": assignee_element, "label": {"type": "plain_text", "text": "Assignee"}, "optional": True})
+
+        # Other fields
+        blocks.extend([
+            {"type": "input", "block_id": "labels_block", "element": {"type": "plain_text_input", "action_id": "labels_input", "initial_value": self._format_labels(prefilled_data.get("label_names", []))}, "label": {"type": "plain_text", "text": "Labels"}, "optional": True},
+            {"type": "input", "block_id": "project_block", "element": {"type": "plain_text_input", "action_id": "project_input", "initial_value": prefilled_data.get("project_name", "")}, "label": {"type": "plain_text", "text": "Project"}, "optional": True},
+            {"type": "input", "block_id": "parent_issue_block", "element": {"type": "plain_text_input", "action_id": "parent_issue_input", "initial_value": str(prefilled_data.get("parent_issue_number", ""))}, "label": {"type": "plain_text", "text": "Parent Issue #"}, "optional": True},
+            {"type": "input", "block_id": "cycle_block", "element": {"type": "plain_text_input", "action_id": "cycle_input", "initial_value": str(prefilled_data.get("cycle_number", ""))}, "label": {"type": "plain_text", "text": "Cycle Number"}, "optional": True}
+        ])
+        
+        return blocks
     
     async def open_update_issue_modal(
         self, 
@@ -278,96 +312,50 @@ class SlackModals:
     ):
         """Fetches data and updates the update issue modal view."""
         try:
-            team_key = None
+            team_key = prefilled_data.get("team_key")
             if isinstance(issue_number, str) and "-" in issue_number:
-                try:
-                    team_key = issue_number.split("-")[0]
-                    issue_number = int(issue_number.split("-")[1])
-                except (IndexError, ValueError):
-                    pass
-            
-            if not team_key:
-                team_key = prefilled_data.get("teamKey") or prefilled_data.get("team_key")
+                team_key = issue_number.split("-")[0]
+                issue_number = int(issue_number.split("-")[1])
 
-            complete_issue_data = {}
-            if hasattr(self, 'linear_tools') and self.linear_tools:
-                try:
-                    issues = self.linear_tools.filterIssues(team_key=team_key, issue_number=issue_number, limit=1) or []
-                    if issues:
-                        issue = issues[0]
-                        if not team_key and issue.get("team"):
-                            team_key = issue["team"].get("key")
-                        
-                        complete_issue_data = {
-                            "title": issue.get("title", ""), "description": issue.get("description", ""),
-                            "priority": issue.get("priority", 0.0),
-                            "state_name": issue.get("state", {}).get("name", "Todo"),
-                            "assignee_name": issue.get("assignee", {}).get("displayName", ""),
-                            "label_names": [label.get("name", "") for label in issue.get("labels", {}).get("nodes", [])],
-                            "project_name": issue.get("project", {}).get("name", "") if issue.get("project") else "",
-                            "teamKey": team_key,
-                            "parent_issue_number": issue.get("parent", {}).get("number", ""),
-                            "cycle_number": issue.get("cycle", {}).get("number", "")
-                        }
-                except Exception as e:
-                    logger.warning(f"Error fetching complete issue data: {str(e)}")
+            # Fetch complete issue data and merge with prefilled data
+            issue_data = self._fetch_and_merge_issue_data(team_key, issue_number, prefilled_data)
+            team_key = issue_data.get("teamKey", "OPS") # Ensure team_key is updated from fetched data
 
-            issue_data = complete_issue_data.copy()
-            issue_data.update({k: v for k, v in prefilled_data.items() if v is not None})
+            # Fetch dynamic options
+            team_options = self._fetch_team_options()
+            state_options = self._fetch_state_options(team_key)
+            assignee_options = self._fetch_assignee_options(team_key)
+            priority_options = [
+                {"text": {"type": "plain_text", "text": "No priority"}, "value": "0.0"},
+                {"text": {"type": "plain_text", "text": "Urgent"}, "value": "1.0"},
+                {"text": {"type": "plain_text", "text": "High"}, "value": "2.0"},
+                {"text": {"type": "plain_text", "text": "Medium"}, "value": "3.0"},
+                {"text": {"type": "plain_text", "text": "Low"}, "value": "4.0"}
+            ]
 
-            if not team_key:
-                team_key = "OPS"
-                issue_data["teamKey"] = team_key
+            # Safely determine initial options
+            initial_team = self._find_initial_option(team_options, team_key)
+            initial_state = self._find_initial_option(state_options, issue_data.get("state_name"))
+            initial_assignee = self._find_initial_option(assignee_options, issue_data.get("assignee_name"))
+            initial_priority = self._find_initial_option(priority_options, str(float(issue_data.get("priority", 0.0))))
 
-            state_options = []
-            if team_key and hasattr(self, 'linear_tools') and self.linear_tools:
-                try:
-                    states = self.linear_tools.getAllStates(teamKey=team_key)
-                    for state in states:
-                        if state.get("name"):
-                            state_options.append({"text": {"type": "plain_text", "text": state.get("name")}, "value": state.get("name")})
-                except Exception as e:
-                    logger.warning(f"Error getting states for team {team_key}: {str(e)}")
-            
-            if not state_options:
-                for state_name in ["Todo", "In Progress", "Done", "Canceled"]:
-                    state_options.append({"text": {"type": "plain_text", "text": state_name}, "value": state_name})
-
-            assignee_options = []
-            if hasattr(self, 'linear_tools') and self.linear_tools and team_key:
-                try:
-                    users = self.linear_tools.getAllUsers(teamKey=team_key)
-                    for user in users:
-                        if user.get("displayName"):
-                            assignee_options.append({"text": {"type": "plain_text", "text": user.get("displayName")}, "value": user.get("displayName")})
-                except Exception as e:
-                    logger.warning(f"Error getting users for dropdown: {str(e)}")
-
-            if not assignee_options:
-                assignee_options.append({"text": {"type": "plain_text", "text": "No assignee"}, "value": ""})
-
-            team_options = [{"text": {"type": "plain_text", "text": k}, "value": k} for k in ["OPS", "RES", "MKT", "AI", "ENG", "PRO"]]
-            initial_team_option = next((opt for opt in team_options if opt["value"] == team_key), team_options[0])
+            # Build view blocks
+            blocks = self._build_issue_form_blocks(
+                issue_data, team_options, state_options, assignee_options, priority_options,
+                initial_team, initial_state, initial_assignee, initial_priority
+            )
+            # Add non-editable issue number block at the top
+            blocks.insert(0, {"type": "section", "text": {"type": "mrkdwn", "text": f"*Updating issue {team_key}-{issue_number}*"}})
 
             view = {
                 "type": "modal", "callback_id": "linear_update_issue_modal",
                 "private_metadata": json.dumps({"conversation_id": conversation_id, "action": "update_issue", "issue_number": issue_number, "team_key": team_key}),
-                "title": {"type": "plain_text", "text": f"Update Issue #{issue_number}"},
+                "title": {"type": "plain_text", "text": f"Update Issue {team_key}-{issue_number}"},
                 "submit": {"type": "plain_text", "text": "Update"}, "close": {"type": "plain_text", "text": "Cancel"},
-                "blocks": [
-                    {"type": "section", "text": {"type": "mrkdwn", "text": f"*Updating issue #{issue_number}*"}},
-                    {"type": "input", "block_id": "team_block", "element": {"type": "static_select", "action_id": "team_select", "placeholder": {"type": "plain_text", "text": "Select team"}, "options": team_options, "initial_option": initial_team_option}, "label": {"type": "plain_text", "text": "Team"}},
-                    {"type": "input", "block_id": "title_block", "element": {"type": "plain_text_input", "action_id": "title_input", "initial_value": issue_data.get("title", "")}, "label": {"type": "plain_text", "text": "Title"}},
-                    {"type": "input", "block_id": "description_block", "element": {"type": "plain_text_input", "action_id": "description_input", "multiline": True, "initial_value": self._truncate_description(issue_data.get("description", ""))}, "label": {"type": "plain_text", "text": "Description"}, "optional": True},
-                    {"type": "input", "block_id": "priority_block", "element": {"type": "static_select", "action_id": "priority_select", "options": [{"text": {"type": "plain_text", "text": "No priority"}, "value": "0.0"}, {"text": {"type": "plain_text", "text": "Urgent"}, "value": "1.0"}, {"text": {"type": "plain_text", "text": "High"}, "value": "2.0"}, {"text": {"type": "plain_text", "text": "Medium"}, "value": "3.0"}, {"text": {"type": "plain_text", "text": "Low"}, "value": "4.0"}], "initial_option": next((opt for opt in [{"text": {"type": "plain_text", "text": "No priority"}, "value": "0.0"}, {"text": {"type": "plain_text", "text": "Urgent"}, "value": "1.0"}, {"text": {"type": "plain_text", "text": "High"}, "value": "2.0"}, {"text": {"type": "plain_text", "text": "Medium"}, "value": "3.0"}, {"text": {"type": "plain_text", "text": "Low"}, "value": "4.0"}] if opt["value"] == str(float(issue_data.get("priority", 0) or 0))), {"text": {"type": "plain_text", "text": "No priority"}, "value": "0.0"}) if issue_data.get("priority") is not None else None}, "label": {"type": "plain_text", "text": "Priority"}, "optional": True},
-                    {"type": "input", "block_id": "state_block", "element": {"type": "static_select", "action_id": "state_select", "options": state_options, "initial_option": next((opt for opt in state_options if opt["value"] == issue_data.get("state_name", "Todo")), state_options[0] if state_options else None)}, "label": {"type": "plain_text", "text": "Status"}, "optional": True},
-                    {"type": "input", "block_id": "assignee_block", "element": {"type": "static_select", "action_id": "assignee_select", "options": assignee_options, "initial_option": next((opt for opt in assignee_options if opt["value"] == issue_data.get("assignee_name")), None) if issue_data.get("assignee_name") else None}, "label": {"type": "plain_text", "text": "Assignee"}, "optional": True},
-                    {"type": "input", "block_id": "labels_block", "element": {"type": "plain_text_input", "action_id": "labels_input", "initial_value": self._format_labels(issue_data.get("label_names", []))}, "label": {"type": "plain_text", "text": "Labels"}, "optional": True},
-                    {"type": "input", "block_id": "project_block", "element": {"type": "plain_text_input", "action_id": "project_input", "initial_value": issue_data.get("project_name", "")}, "label": {"type": "plain_text", "text": "Project"}, "optional": True},
-                    {"type": "input", "block_id": "parent_issue_block", "element": {"type": "plain_text_input", "action_id": "parent_issue_input", "initial_value": str(issue_data.get("parent_issue_number", ""))}, "label": {"type": "plain_text", "text": "Parent Issue #"}, "optional": True},
-                    {"type": "input", "block_id": "cycle_block", "element": {"type": "plain_text_input", "action_id": "cycle_input", "initial_value": str(issue_data.get("cycle_number", ""))}, "label": {"type": "plain_text", "text": "Cycle Number"}, "optional": True}
-                ]
+                "blocks": blocks
             }
+
+            view, _ = self._validate_view_size(view)
 
             await asyncio.to_thread(
                 self.slack_client.views_update,
@@ -378,21 +366,36 @@ class SlackModals:
 
         except SlackApiError as e:
             logger.error(f"Error updating update issue modal view {view_id}: {e.response['error']}")
-            error_view = {
-                "type": "modal",
-                "title": {"type": "plain_text", "text": "Error"},
-                "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": f"Sorry, I couldn't load the form. Error: {e.response['error']}"}}]
-            }
-            try:
-                await asyncio.to_thread(
-                    self.slack_client.views_update,
-                    view_id=view_id,
-                    view=error_view
-                )
-            except SlackApiError:
-                pass
+            # Handle error view update
         except Exception as e:
             logger.error(f"Unexpected error in _update_update_issue_view: {str(e)}")
+
+    def _fetch_and_merge_issue_data(self, team_key, issue_number, prefilled_data):
+        """Fetches complete issue data from Linear and merges it with prefilled data."""
+        complete_issue_data = {}
+        if hasattr(self, 'linear_tools') and self.linear_tools:
+            try:
+                issues = self.linear_tools.filterIssues(team_key=team_key, issue_number=issue_number, limit=1) or []
+                if issues:
+                    issue = issues[0]
+                    complete_issue_data = {
+                        "title": issue.get("title", ""), "description": issue.get("description", ""),
+                        "priority": issue.get("priority", 0.0),
+                        "state_name": issue.get("state", {}).get("name", "Todo"),
+                        "assignee_name": issue.get("assignee", {}).get("displayName", ""),
+                        "label_names": [label.get("name", "") for label in issue.get("labels", {}).get("nodes", [])],
+                        "project_name": issue.get("project", {}).get("name", "") if issue.get("project") else "",
+                        "teamKey": issue.get("team", {}).get("key"),
+                        "parent_issue_number": issue.get("parent", {}).get("number", ""),
+                        "cycle_number": issue.get("cycle", {}).get("number", "")
+                    }
+            except Exception as e:
+                logger.warning(f"Error fetching complete issue data: {str(e)}")
+
+        # Prefilled data overrides fetched data
+        merged_data = complete_issue_data.copy()
+        merged_data.update({k: v for k, v in prefilled_data.items() if v is not None})
+        return merged_data
     
     async def handle_view_submission(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """

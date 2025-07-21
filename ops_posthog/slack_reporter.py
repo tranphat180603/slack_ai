@@ -33,18 +33,6 @@ class SlackReporter:
         
         # Channel mappings - now maps channel IDs to lists of dashboards
         self.channel_dashboards = {
-            os.environ.get("TM_API_CHANNEL_ID", "C07F3SD76EA"): {
-                "channel_name": "TM API",
-                "dashboards": ["API Dashboard"]
-            },
-            os.environ.get("PRODUCT_CHANNEL_ID", "C07C44USZKR"): {
-                "channel_name": "Product",
-                "dashboards": ["Product Dashboard", "Trading Dashboard", "Usage Analytics Dashboards"]
-            },
-            os.environ.get("MARKETING_CHANNEL_ID", "C07D7F5531N"): {
-                "channel_name": "Marketing",
-                "dashboards": ["Marketing Dashboard"]
-            },
             "C092DANQ5RT": {  # tm-moonshot channel
                 "channel_name": "TM Moonshot",
                 "dashboards": ["Moonshot Analytics"]
