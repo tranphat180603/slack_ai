@@ -130,18 +130,14 @@ class SlackClient:
         {'display_name': '@Özcan İlhan', 'real_name': 'Özcan İlhan', 'title': '', 'team': 'ENG'},
         {'display_name': '@Faith Oladejo', 'real_name': 'Faith Oladejo', 'title': '', 'team': 'PRO'},
         {'display_name': '@Taf', 'real_name': 'Tafcir Majumder', 'title': 'Head Of Business Development', 'team': 'MKT'},
-        {'display_name': '@Caleb N', 'real_name': 'Caleb', 'title': '', 'team': 'MKT'},
-        {'display_name': '@divine', 'real_name': 'Divine Anthony', 'title': 'Devops', 'team': 'ENG'},
         {'display_name': '@Williams', 'real_name': 'Williams Williams', 'title': 'Senior Fullstack Engineer', 'team': 'ENG'},
         {'display_name': '@Anki Truong', 'real_name': 'Truong An (Anki)', 'title': '', 'team': 'ENG'},
         {'display_name': '@Ryan', 'real_name': 'Ryan Barcelona', 'title': 'Freelancer', 'team': 'MKT'},
         {'display_name': '@Phat', 'real_name': 'Ngoc Phat', 'title': '', 'team': 'OPS'},
         {'display_name': '@AhmedHamdy', 'real_name': 'AhmedHamdy', 'title': 'Senior Data Scientist/ML Engineer', 'team': 'AI'},
         {'display_name': '@Grady', 'real_name': 'Grady', 'title': 'Data Scientist/AI Engineer', 'team': 'AI'},
-        {'display_name': '@Khadijah', 'real_name': 'Khadijah Shogbuyi', 'title': '', 'team': 'OPS'},
-        {'display_name': '@Talha Cagri', 'real_name': 'Talha Cagri Kotcioglu', 'title': 'Quantitative Analyst', 'team': 'AI'},
         {'display_name': '@Agustín Gamoneda', 'real_name': 'Agustín Gamoneda', 'title': '', 'team': 'MKT'},
-        {'display_name': '@Peterson', 'real_name': 'Peterson Nwoko', 'title': 'Sr DevOps/SRE Engineer', 'team': 'ENG'}
+        {'display_name': '@Segun', 'real_name': 'Segun', 'title': 'Sr SRE/DevOps Engineer', 'team': 'ENG'},
         ]
         if display_name:
             return [user for user in users_list if re.match(f"^{re.escape(display_name)}$", user['display_name'], re.IGNORECASE)]
