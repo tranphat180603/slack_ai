@@ -120,7 +120,7 @@ class SlackModals:
         try:
             title = prefilled_data.get("title", "")
             description = prefilled_data.get("description", "")
-            team_key = prefilled_data.get("team_key", "OPS")
+            team_key = prefilled_data.get("teamKey", "OPS")
             
             # Fetch dynamic data
             team_options = self._fetch_team_options()
@@ -537,6 +537,21 @@ class SlackModals:
                             pass
                 
                 logger.info(f"Issue created successfully with number: {issue_number}")
+                logger.info(f"Issue URL: https://linear.app/token-metrics/issue/{team_key}-{issue_number}")
+                
+                # Send URL message to chat
+                conversation_id = metadata.get("conversation_id")
+                if conversation_id and issue_number:
+                    try:
+                        issue_url = f"https://linear.app/token-metrics/issue/{team_key}-{issue_number}"
+                        await asyncio.to_thread(
+                            self.slack_client.chat_postMessage,
+                            channel=conversation_id,
+                            text=f"Linear issue created: {issue_url}",
+                            unfurl_links=False
+                        )
+                    except Exception as e:
+                        logger.error(f"Error sending issue URL to chat: {str(e)}")
                 
                 return {
                     "success": True,

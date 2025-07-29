@@ -33,10 +33,22 @@ class SlackReporter:
         
         # Channel mappings - now maps channel IDs to lists of dashboards
         self.channel_dashboards = {
+            "C07D7F5531N": {  # marketing channel
+                "channel_name": "Marketing",
+                "dashboards": ["Marketing Dashboard"]
+            },
+            "C07C44USZKR": {  # product channel
+                "channel_name": "Product",
+                "dashboards": ["Product Dashboard", "Usage Analytics Dashboard", "Trading Dashboard"]
+            },
+            "C07F3SD76EA": {  # tm-api channel
+                "channel_name": "TM API",
+                "dashboards": ["API Dashboard"]
+            },
             "C092DANQ5RT": {  # tm-moonshot channel
                 "channel_name": "TM Moonshot",
                 "dashboards": ["Moonshot Analytics"]
-            }
+            },
         }
     
     async def send_message(self, channel_id: str, text: str, thread_ts: Optional[str] = None) -> Dict:
