@@ -34,7 +34,7 @@ def delete_specific_message():
     
     # Channel IDs to search
     channels = {
-        "Grant Program Channel": "C093RQ9CRNV"
+        "Engineering test Channel": "C07QK3HB9V2"
     }
     
     # The specific text we're looking for

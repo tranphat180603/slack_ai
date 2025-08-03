@@ -523,7 +523,7 @@ class PosthogClient:
                 return "Error: OpenAI API key not configured"
             
             # Use OpenAI for analysis
-            ai_client = OpenaiClient(openai_api_key, model="o4-mini-2025-04-16")
+            ai_client = OpenaiClient(openai_api_key, model="o3")
 
             print(f"Using model: {ai_client.model}")
             
@@ -898,7 +898,7 @@ AGAIN: DO NOT USE OTHER MARKDOWN FORMATTING THAT IS NOT LISTED HERE.
                 logger.error("OPENAI_API_KEY environment variable not set")
                 return "Error: OpenAI API key not configured"
             
-            ai_client = OpenaiClient(openai_api_key, model="o4-mini-2025-04-16")
+            ai_client = OpenaiClient(openai_api_key, model="o3")
             
             # Generate insights with a system prompt
             system_prompt = """You are TMAI Agent, a helpful assistant operate within the company called Token Metrics, a company works in the field of crypto and AI.
