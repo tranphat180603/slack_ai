@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 def delete_latest_bot_message():
-    """Delete bot thread replies from specified channels."""
+    """Delete the most recent bot message from specified channels."""
     
     # Initialize Slack client
     slack_token = os.environ.get("SLACK_BOT_TOKEN")
@@ -35,7 +35,10 @@ def delete_latest_bot_message():
     
     # Channel IDs to clean up
     channels = {
-        "Engineering test Channel": "C07QK3HB9V2"
+        "Marketing channel": "C07D7F5531N",
+        "Product channel": "C07C44USZKR",
+        "TM Moonshots channel": "C092DANQ5RT",
+        "TM API channel": "C07F3SD76EA",
     }
     
     total_success_count = 0
@@ -56,102 +59,67 @@ def delete_latest_bot_message():
             
             messages = response["messages"]
             
-            # Method 1: Find bot thread replies from conversations_history
-            bot_thread_replies = []
-            thread_timestamps = set()  # Track threads we've seen
+            # Find normal bot messages (top-level messages or thread starters)
+            bot_messages = []
             
             for message in messages:
-                # Collect all thread timestamps to check later
-                if "thread_ts" in message:
-                    thread_timestamps.add(message["thread_ts"])
-                
-                # Find bot replies in threads
+                # Find bot messages that are NOT thread replies
+                # (either no thread_ts or thread_ts == ts which means it's a thread starter)
                 if (message.get("user") == bot_user_id and 
-                    "thread_ts" in message and 
-                    message["thread_ts"] != message["ts"]):
-                    bot_thread_replies.append(message)
+                    ("thread_ts" not in message or message.get("thread_ts") == message["ts"])):
+                    bot_messages.append(message)
             
-            print(f"Found {len(bot_thread_replies)} bot thread replies from recent messages")
-            
-            # Method 2: Check each thread individually for more bot messages
-            print(f"Checking {len(thread_timestamps)} individual threads for additional bot messages...")
-            
-            for thread_ts in thread_timestamps:
-                try:
-                    thread_response = client.conversations_replies(
-                        channel=channel_id,
-                        ts=thread_ts,
-                        limit=100
-                    )
-                    
-                    if thread_response["ok"]:
-                        thread_messages = thread_response["messages"]
-                        
-                        for thread_message in thread_messages:
-                            # Skip the parent message and messages we already found
-                            if (thread_message.get("user") == bot_user_id and 
-                                "thread_ts" in thread_message and 
-                                thread_message["thread_ts"] != thread_message["ts"] and
-                                thread_message not in bot_thread_replies):
-                                
-                                # Check if we already have this message (avoid duplicates)
-                                message_exists = any(existing["ts"] == thread_message["ts"] for existing in bot_thread_replies)
-                                if not message_exists:
-                                    bot_thread_replies.append(thread_message)
-                                    print(f"Found additional bot reply in thread {thread_ts}")
-                    
-                except SlackApiError as e:
-                    print(f"Error checking thread {thread_ts}: {e.response['error']}")
-                    continue
-            
-            if not bot_thread_replies:
-                print(f"No bot thread replies found in {channel_name}")
+            if not bot_messages:
+                print(f"No bot messages found in {channel_name}")
                 continue
             
-            print(f"Found {len(bot_thread_replies)} total bot thread reply(ies) in {channel_name}")
+            print(f"Found {len(bot_messages)} bot message(s) in {channel_name}")
             
-            # Process each bot thread reply
-            channel_success_count = 0
-            for i, message in enumerate(bot_thread_replies):
-                message_ts = message["ts"]
-                thread_ts = message["thread_ts"]
-                message_text = message.get("text", "")[:100] + "..." if len(message.get("text", "")) > 100 else message.get("text", "")
+            # Sort messages by timestamp (most recent first) and take only the most recent
+            if bot_messages:
+                bot_messages.sort(key=lambda x: float(x["ts"]), reverse=True)
+                latest_message = bot_messages[0]
                 
-                print(f"\nThread Reply {i+1}/{len(bot_thread_replies)}:")
+                message_ts = latest_message["ts"]
+                message_text = latest_message.get("text", "")[:100] + "..." if len(latest_message.get("text", "")) > 100 else latest_message.get("text", "")
+                
+                print(f"\nMost Recent Bot Message:")
                 print(f"Message: '{message_text}'")
                 print(f"Message timestamp: {message_ts}")
-                print(f"Thread timestamp: {thread_ts}")
+                
+                # Check if it's a thread starter
+                if "thread_ts" in latest_message and latest_message["thread_ts"] == latest_message["ts"]:
+                    print("Type: Thread starter")
+                else:
+                    print("Type: Regular message")
                 
                 # Confirm deletion
-                confirm = input(f"Delete this thread reply from {channel_name}? (y/N): ").strip().lower()
-                if confirm != 'y':
-                    print("Skipped.")
-                    continue
-                
-                try:
-                    delete_response = client.chat_delete(
-                        channel=channel_id,
-                        ts=message_ts
-                    )
-                    
-                    if delete_response["ok"]:
-                        print(f"✅ Successfully deleted thread reply from {channel_name}")
-                        channel_success_count += 1
-                    else:
-                        print(f"❌ Failed to delete thread reply from {channel_name}: {delete_response.get('error', 'Unknown error')}")
+                confirm = input(f"Delete this most recent message from {channel_name}? (y/N): ").strip().lower()
+                if confirm == 'y':
+                    try:
+                        delete_response = client.chat_delete(
+                            channel=channel_id,
+                            ts=message_ts
+                        )
                         
-                except SlackApiError as e:
-                    print(f"❌ Error deleting thread reply: {e.response['error']}")
-                    continue
+                        if delete_response["ok"]:
+                            print(f"✅ Successfully deleted most recent message from {channel_name}")
+                            total_success_count += 1
+                        else:
+                            print(f"❌ Failed to delete message from {channel_name}: {delete_response.get('error', 'Unknown error')}")
+                            
+                    except SlackApiError as e:
+                        print(f"❌ Error deleting message: {e.response['error']}")
+                else:
+                    print("Skipped.")
             
-            total_success_count += channel_success_count
-            print(f"\n📊 Channel Summary: Deleted {channel_success_count}/{len(bot_thread_replies)} bot thread replies from {channel_name}")
+            print(f"\n📊 Channel Summary: Processed most recent bot message from {channel_name}")
                 
         except SlackApiError as e:
             print(f"❌ Error processing {channel_name}: {e.response['error']}")
             continue
     
-    print(f"\n🎉 Successfully deleted {total_success_count} bot thread replies total")
+    print(f"\n🎉 Successfully deleted {total_success_count} most recent bot message(s) total")
     return total_success_count > 0
 
 def list_bot_thread_messages(channel_id, client, bot_user_id):
@@ -214,9 +182,12 @@ if __name__ == "__main__":
     print("=" * 40)
     
     # Warning
-    print("⚠️  WARNING: This will delete bot thread replies from:")
-    print("   - Engineering test Channel")
-    print("   (Only deletes bot replies to threads, not bot's own thread starters)")
+    print("⚠️  WARNING: This will delete the MOST RECENT bot message from:")
+    print("   - Marketing channel")
+    print("   - Product channel") 
+    print("   - TM Moonshots channel")
+    print("   - TM API channel")
+    print("   (Deletes most recent normal bot message or thread starter, not thread replies)")
     print()
     
     confirm = input("Are you sure you want to proceed? (y/N): ").strip().lower()

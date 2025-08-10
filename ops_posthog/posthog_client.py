@@ -615,8 +615,8 @@ Be aware of the time period (today's date and current week) of the data you are 
         prompt = f"""Analyze the following Posthog analytics data for {dashboard_name} over the past {days} days.
 
 Dashboard: {dashboard_name}
-Today's date: {self._get_date_and_week_range()[0]}
-Current week that spans from: start date: {self._get_date_and_week_range()[1]} to end date: {self._get_date_and_week_range()[2]}
+Today's date: 2025-08-03
+Current week that spans from: start date: 2025-07-28 to end date: 2025-08-03
 Period: {data.get("period", f"{days} days")}
 
 Dashboard Analytics Data:
@@ -633,7 +633,7 @@ Please provide a comprehensive weekly analysis with the following sections:
 2. Recommendations - 3 data-driven, actionable recommendations
 
 General rule:
-- Focus specifically on the latest week's data. Which spans from {self._get_date_and_week_range()[1]} to {self._get_date_and_week_range()[2]}, give comparisons to the last week of it, laser focused on it!
+- Focus specifically on the latest week's data. Which spans from 2025-07-28 to 2025-08-03, give comparisons to the last week of it, laser focused on it!
 - Get straight to the point without any heading. Make sure the entire report does not exceed 150 words. Make it condensed like a X post (Twitter tweet).
 - Focus on extracting valuable insights rather than just describing numbers.
 - For each insight, if an image URL is available in 'Insight images', include it directly under its analysis using the Slack link format: <IMAGE_URL|View {{Insight Name}} Image>. Do NOT use Markdown [Text](URL) format. If an image URL is not related to the insight, just ignore it. If there's no image, just don't mention it entirely.
@@ -805,8 +805,8 @@ AGAIN: DO NOT USE OTHER MARKDOWN FORMATTING THAT IS NOT LISTED HERE.
         prompt = f"""Analyze the following Posthog analytics data across multiple dashboards over the past 28 days.
 
 Dashboards: {', '.join(dashboard_names)}
-Today's date: {self._get_date_and_week_range()[0]}
-Current week that spans from: start date: {self._get_date_and_week_range()[1]} to end date: {self._get_date_and_week_range()[2]}
+Today's date: 2025-08-03
+Current week that spans from: start date: 2025-07-28 to end date: 2025-08-03
 
 Dashboard Analytics Data:
 {formatted_data}

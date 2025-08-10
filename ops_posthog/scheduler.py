@@ -95,13 +95,14 @@ class PosthogScheduler:
         # Get offset from UTC directly from the timezone-aware datetime
         local_offset = now.utcoffset().total_seconds() / 3600
         
-        local_time = time(23, 00).replace(hour=(0 - int(local_offset)) % 24)
+        local_time = time(21, 00).replace(hour=(0 - int(local_offset)) % 24)
         
-        schedule.every().monday.at(local_time.strftime("%H:%M")).do(
+        # Schedule directly for 21:00 UTC
+        schedule.every().sunday.at("21:00").do(
             lambda: asyncio.run(self.send_weekly_report())
         )
         
-        logger.info(f"Scheduled weekly report (Monday 23:00 UTC, local time: {local_time.strftime('%H:%M')})")
+        logger.info(f"Scheduled weekly report (Sunday 21:00 UTC, local time: {local_time.strftime('%H:%M')})")
     
     def start(self):
         """Start the scheduler."""

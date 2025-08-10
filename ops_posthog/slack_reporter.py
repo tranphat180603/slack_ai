@@ -39,11 +39,11 @@ class SlackReporter:
             },
             "C07C44USZKR": {  # product channel
                 "channel_name": "Product",
-                "dashboards": ["Product Dashboard", "Usage Analytics Dashboard", "Trading Dashboard"]
+                "dashboards": ["Product Dashboard", "Usage Analytics Dashboard", "Trading Dashboard", "Alerts Dashboard"]
             },
             "C07F3SD76EA": {  # tm-api channel
                 "channel_name": "TM API",
-                "dashboards": ["API Dashboard"]
+                "dashboards": ["API Dashboard", "API Cohort Analysis Dashboard"]
             },
             "C092DANQ5RT": {  # tm-moonshot channel
                 "channel_name": "TM Moonshot",
