@@ -10,14 +10,21 @@ ENV PORT=8000
 # Set working directory
 WORKDIR /app
 
-# Configure APT: force IPv4 + retries, and switch to DigitalOcean mirrors (HTTPS)
+# Configure APT: force IPv4 + retries + short timeouts,
+# remove default deb.debian.org deb822 source, and use HTTPS mirrors.
 RUN set -eux; \
-  printf 'Acquire::Retries "5";\nAcquire::ForceIPv4 "true";\n' > /etc/apt/apt.conf.d/99net; \
+  # Force IPv4 and add retries/timeouts so failures happen fast
+  printf 'Acquire::Retries "5";\nAcquire::ForceIPv4 "true";\nAcquire::http::Timeout "10";\nAcquire::https::Timeout "10";\n' \
+    > /etc/apt/apt.conf.d/99net; \
+  # The base image ships an extra deb822 source pointing at deb.debian.org — remove it
+  rm -f /etc/apt/sources.list.d/debian.sources; \
+  # Use mirrors that are reachable from DigitalOcean
   printf '%s\n' \
     'deb https://mirrors.digitalocean.com/debian bookworm main' \
     'deb https://mirrors.digitalocean.com/debian bookworm-updates main' \
     'deb https://security.debian.org/debian-security bookworm-security main' \
     > /etc/apt/sources.list; \
+  # Update + install system deps
   apt-get update; \
   apt-get install -y --no-install-recommends \
     build-essential \
