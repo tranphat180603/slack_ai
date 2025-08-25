@@ -1,0 +1,225 @@
+version: '3.8'
+
+services:
+  db:
+    image: timescale/timescaledb-ha:pg17
+    environment:
+      - POSTGRES_USER=phattran
+      - POSTGRES_PASSWORD=phatdeptrai123
+      - POSTGRES_DB=tmai_db
+      # Add these to prevent postgres user auth errors
+      - POSTGRES_HOST_AUTH_METHOD=trust
+      - PGUSER=phattran
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Add initialization script to create postgres user
+      - ./create_postgres_user.sql:/docker-entrypoint-initdb.d/create_postgres_user.sql
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U phattran -d tmai_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - slack_ai_network
+
+  # Build the image once with a name
+  build-image:
+    build:
+      context: .
+      args:
+        DEBIAN_FRONTEND: noninteractive
+    image: slack_ai:latest
+    command: ["echo", "Image built successfully"]
+    networks:
+      - slack_ai_network
+
+
+  db-init:
+    image: slack_ai:latest  # Use the pre-built image
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_DB=tmai_db
+      - POSTGRES_USER=phattran
+      - POSTGRES_PASSWORD=phatdeptrai123
+      - DATABASE_URL=postgresql://phattran:phatdeptrai123@db:5432/tmai_db
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      build-image:
+        condition: service_completed_successfully
+    command: ["/bin/sh", "-c", "echo 'Waiting for PostgreSQL...' && while ! pg_isready -h db -U phattran -d tmai_db; do sleep 1; done && echo 'PostgreSQL is up - running Linear RAG schema' && python ops_linear_db/linear_rag_db_create.py"]
+    networks:
+      - slack_ai_network
+
+  # Test service to verify database connection
+  db-test:
+    image: slack_ai:latest  # Use the pre-built image
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_DB=tmai_db
+      - POSTGRES_USER=phattran
+      - POSTGRES_PASSWORD=phatdeptrai123
+      - DATABASE_URL=postgresql://phattran:phatdeptrai123@db:5432/tmai_db
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    command: ["python", "test_db_connection.py"]
+    restart: "no"
+    networks:
+      - slack_ai_network
+
+  app:
+    image: slack_ai:latest  # Use the pre-built image
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_DB=tmai_db
+      - POSTGRES_USER=phattran
+      - POSTGRES_PASSWORD=phatdeptrai123                                                          
+      - DATABASE_URL=postgresql://phattran:phatdeptrai123@db:5432/tmai_db
+      - AI_MODEL=gpt-4o
+      - COMMANDER_MODEL=gpt-4.1-2025-04-14
+      - CAPTAIN_MODEL=gpt-4.1-2025-04-14
+      - SOLDIER_MODEL=gpt-4.1-2025-04-14
+    env_file:
+      - .env
+    # Simple bind mount that should work with most Docker versions
+    volumes:
+      - /root/slack_ai/prompts:/app/prompts
+    depends_on:
+      db-test:
+        condition: service_completed_successfully
+    command: ["uvicorn", "app.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    restart: always
+    networks:
+      - slack_ai_network
+
+  # Initial data load service - runs once and exits
+  scheduler-init:
+    image: slack_ai:latest  # Use the pre-built image
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_DB=tmai_db
+      - POSTGRES_USER=phattran
+      - POSTGRES_PASSWORD=phatdeptrai123
+      - DATABASE_URL=postgresql://phattran:phatdeptrai123@db:5432/tmai_db
+      - AI_MODEL=gpt-4o
+      - COMMANDER_MODEL=gpt-4.1-2025-04-14
+      - CAPTAIN_MODEL=gpt-4.1-2025-04-14
+      - SOLDIER_MODEL=gpt-4.1-2025-04-14
+    env_file:
+      - .env
+    # Simple bind mount that should work with most Docker versions
+    volumes:
+      - /root/slack_ai/prompts:/app/prompts
+    depends_on:
+      db-test:
+        condition: service_completed_successfully
+    command: ["python", "ops_linear_db/linear_rag_sync.py", "--force"]
+    # No restart policy - runs once and exits
+    restart: "no"
+    networks:
+      - slack_ai_network
+
+  # Regular scheduler service - starts after initial load
+  scheduler:
+    image: slack_ai:latest  # Use the pre-built image
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_DB=tmai_db
+      - POSTGRES_USER=phattran
+      - POSTGRES_PASSWORD=phatdeptrai123
+      - DATABASE_URL=postgresql://phattran:phatdeptrai123@db:5432/tmai_db
+      - AI_MODEL=gpt-4o
+      - COMMANDER_MODEL=gpt-4.1-2025-04-14
+      - CAPTAIN_MODEL=gpt-4.1-2025-04-14
+      - SOLDIER_MODEL=gpt-4.1-2025-04-14
+    env_file:
+      - .env
+    # Simple bind mount that should work with most Docker versions
+    volumes:
+      - /root/slack_ai/prompts:/app/prompts
+    depends_on:
+      scheduler-init:
+        condition: service_completed_successfully
+    command: ["python", "-c", "import time, os, sys; sys.path.insert(0, '.'); from ops_linear_db.linear_rag_sync import main; while True: main(); time.sleep(86400)"]
+    restart: always
+    profiles: ["manual"]
+    networks:
+      - slack_ai_network
+
+  # Conversation cleanup service
+  conversation-cleanup:
+    image: slack_ai:latest  # Use the pre-built image
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_DB=tmai_db
+      - POSTGRES_USER=phattran
+      - POSTGRES_PASSWORD=phatdeptrai123
+      - DATABASE_URL=postgresql://phattran:phatdeptrai123@db:5432/tmai_db
+    env_file:
+      - .env
+    depends_on:
+      db-test:
+        condition: service_completed_successfully
+    # Use the init_conversation_db.py script to initialize tables
+    command: ["/bin/sh", "-c", "echo 'Initializing conversation database tables...' && cd /app && PYTHONPATH=/app python ops_conversation_db/init_conversation_db.py && echo 'Starting conversation cleanup service...' && while true; do python -m ops_conversation_db.conversation_db --cleanup=24; echo 'Sleeping for 24 hours...'; sleep 86400; done"]
+    networks:
+      - slack_ai_network
+  # Service to sync website database immediately and then once a month
+  website-db-sync:
+    image: slack_ai:latest
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_DB=tmai_db
+      - POSTGRES_USER=phattran
+      - POSTGRES_PASSWORD=phatdeptrai123
+      - DATABASE_URL=postgresql://phattran:phatdeptrai123@db:5432/tmai_db
+    env_file:
+      - .env
+    depends_on:
+      db-test:
+        condition: service_completed_successfully
+    command:
+      - /bin/sh
+      - -c
+      - |
+        # First ensure database tables exist (if any are needed)
+        echo "Checking/creating website database tables..."
+        python -c 'from sqlalchemy import create_engine; from ops_website_db.db_models import Base; engine = create_engine("postgresql://phattran:phatdeptrai123@db:5432/tmai_db"); Base.metadata.create_all(engine)' || echo "No Base model found in ops_website_db.db_models, continuing..."
+        
+        # Run immediately on startup
+        echo "$$(date): Initializing and running initial website_db sync"
+        python ops_website_db/sync_data.py crawl --site all --force
+        echo "$$(date): Initial website_db sync completed"
+        
+        # Then follow the weekly schedule
+        while true; do
+          day_of_month=$$(date +%d)
+          # Run on the 1st day of the month
+          if [ "$$day_of_month" -eq 1 ]; then
+            echo "$$(date): Initializing and running scheduled monthly website_db sync"
+            python ops_website_db/sync_data.py crawl --site all --force
+            echo "$$(date): Scheduled monthly website_db sync completed"
+          fi
+          echo "$$(date): Sleeping for 1 day until next check"
+          sleep 86400
+        done
+    restart: always
+    networks:
+      - slack_ai_network
+
+networks:
+  slack_ai_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+
