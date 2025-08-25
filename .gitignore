@@ -15,10 +15,7 @@ venv/
 .vscode/
 *.swp
 *.swo
-docker-compose.yml
 .cursor
 .cursorignore
-Dockerfile
-docker-compose.yml
 .gitignore
 logfile
