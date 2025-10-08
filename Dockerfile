@@ -1,23 +1,37 @@
-# Use an Alpine base to avoid apt-based package installs
-FROM python:3.11-alpine3.20
+# Use a stable Debian base and avoid deb.debian.org timeouts on DO
+FROM python:3.11-slim-bookworm
 
-ENV PYTHONUNBUFFERED=1 \
-    PORT=8000
+# Reduce noisy prompts in apt
+ENV DEBIAN_FRONTEND=noninteractive
+# Optional but helpful
+ENV PYTHONUNBUFFERED=1
+ENV PORT=8000
 
 # Set working directory
 WORKDIR /app
 
-# Configure APK to use DigitalOcean mirrors (more reliable from DO droplets)
+# Configure APT: force IPv4 + retries + short timeouts,
+# remove default deb.debian.org deb822 source, and use HTTPS mirrors.
 RUN set -eux; \
-    echo "https://mirrors.digitalocean.com/alpine/v3.20/main" > /etc/apk/repositories; \
-    echo "https://mirrors.digitalocean.com/alpine/v3.20/community" >> /etc/apk/repositories; \
-    apk add --no-cache \
-        build-base \
-        postgresql-dev \
-        postgresql-client \
-        ca-certificates \
-        libffi-dev \
-        openssl-dev
+  # Force IPv4 and add retries/timeouts so failures happen fast
+  printf 'Acquire::Retries "5";\nAcquire::ForceIPv4 "true";\nAcquire::http::Timeout "10";\nAcquire::https::Timeout "10";\n' \
+    > /etc/apt/apt.conf.d/99net; \
+  # The base image ships an extra deb822 source pointing at deb.debian.org — remove it
+  rm -f /etc/apt/sources.list.d/debian.sources; \
+  # Use mirrors that are reachable from DigitalOcean
+  printf '%s\n' \
+    'deb https://mirrors.digitalocean.com/debian bookworm main' \
+    'deb https://mirrors.digitalocean.com/debian bookworm-updates main' \
+    'deb https://security.debian.org/debian-security bookworm-security main' \
+    > /etc/apt/sources.list; \
+  # Update + install system deps
+  apt-get update; \
+  apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    postgresql-client \
+    ca-certificates \
+  ; rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first to leverage Docker cache
 COPY requirements.txt .
