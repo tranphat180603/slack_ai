@@ -18,11 +18,11 @@ RUN set -eux; \
     > /etc/apt/apt.conf.d/99net; \
   # The base image ships an extra deb822 source pointing at deb.debian.org — remove it
   rm -f /etc/apt/sources.list.d/debian.sources; \
-  # Use mirrors that are reachable from DigitalOcean
+  # Use official Debian mirrors (IPv4 forced above)
   printf '%s\n' \
-    'deb https://mirrors.digitalocean.com/debian bookworm main' \
-    'deb https://mirrors.digitalocean.com/debian bookworm-updates main' \
-    'deb https://security.debian.org/debian-security bookworm-security main' \
+    'deb http://deb.debian.org/debian bookworm main' \
+    'deb http://deb.debian.org/debian bookworm-updates main' \
+    'deb http://security.debian.org/debian-security bookworm-security main' \
     > /etc/apt/sources.list; \
   # Update + install system deps
   apt-get update; \
