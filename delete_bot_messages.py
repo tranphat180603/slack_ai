@@ -35,10 +35,11 @@ def delete_latest_bot_message():
     
     # Channel IDs to clean up
     channels = {
-        "Marketing channel": "C07D7F5531N",
+        "Marketing channel": "C07QK3HB9V2",
         "Product channel": "C07C44USZKR",
         "TM Moonshots channel": "C092DANQ5RT",
         "TM API channel": "C07F3SD76EA",
+        "blocked": "C09D3N6EJ4D"
     }
     
     total_success_count = 0

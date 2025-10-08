@@ -489,7 +489,15 @@ class PosthogClient:
         
         return results
     
-    def generate_ai_insights(self, dashboard_name: str, days: int = 7, insight_type: str = "daily", slack_channel_id: Optional[str] = None, slack_thread_ts: Optional[str] = None) -> str:
+    def generate_ai_insights(
+        self,
+        dashboard_name: str,
+        days: int = 7,
+        insight_type: str = "daily",
+        slack_channel_id: Optional[str] = None,
+        slack_thread_ts: Optional[str] = None,
+        focus_metrics: Optional[List[str]] = None
+    ) -> str:
         """
         Generate AI-powered insights about dashboard data.
         
@@ -512,7 +520,7 @@ class PosthogClient:
             if insight_type.lower() == "daily":
                 prompt = self._get_daily_analysis_prompt(dashboard_name, dashboard_data, days)
             elif insight_type.lower() == "weekly":
-                prompt = self._get_weekly_analysis_prompt(dashboard_name, dashboard_data, days)
+                prompt = self._get_weekly_analysis_prompt(dashboard_name, dashboard_data, days, focus_metrics)
             else:
                 prompt = self._get_daily_analysis_prompt(dashboard_name, dashboard_data, days)
             
@@ -580,11 +588,12 @@ Write a concise and straight to the point report. Don't include any fluff. Don't
     
     def _get_daily_analysis_prompt(self, dashboard_name: str, data: Dict, days: int) -> str:
         """Generate prompt for daily analysis."""        
+        current_date, week_start, week_end = self._get_date_and_week_range()
         prompt = f"""Analyze the following Posthog analytics data for {dashboard_name} over the past {days} days.
  
 Dashboard: {dashboard_name}
-Today's date: {self._get_date_and_week_range()[0]}
-Current week that spans from: start date: {self._get_date_and_week_range()[1]} to end date: {self._get_date_and_week_range()[2]}
+Today's date: {current_date}
+Current week that spans from: start date: {week_start} to end date: {week_end}
 
 Insights:
 {data.get("insights")}
@@ -603,7 +612,7 @@ Be aware of the time period (today's date and current week) of the data you are 
 """
         return prompt
     
-    def _get_weekly_analysis_prompt(self, dashboard_name: str, data: Dict, days: int) -> str:
+    def _get_weekly_analysis_prompt(self, dashboard_name: str, data: Dict, days: int, focus_metrics: Optional[List[str]] = None) -> str:
         """Generate prompt for weekly analysis."""
         
         # Format the data using the same comprehensive formatting as multi-dashboard reports
@@ -612,31 +621,38 @@ Be aware of the time period (today's date and current week) of the data you are 
             "all_insights_images": data.get("insights_images", {})
         })
         
+        current_date, week_start, week_end = self._get_date_and_week_range()
+        focus_metrics_section = ""
+        if focus_metrics:
+            focus_metrics_formatted = "\n".join([f"- {metric}" for metric in focus_metrics])
+            focus_metrics_section = f"\n\nFocus KPIs (analyze only these and ignore unrelated metrics):\n{focus_metrics_formatted}\n"
+
         prompt = f"""Analyze the following Posthog analytics data for {dashboard_name} over the past {days} days.
 
 Dashboard: {dashboard_name}
-Today's date: {self._get_date_and_week_range()[0]}
-Current week that spans from: start date: {self._get_date_and_week_range()[1]} to end date: {self._get_date_and_week_range()[2]}
+Today's date: {current_date}
+Current week that spans from: start date: {week_start} to end date: {week_end}
 Period: {data.get("period", f"{days} days")}
 
 Dashboard Analytics Data:
 {formatted_data}
 
 Insight images:
-{data.get("insights_images")}
+{data.get("insights_images")}{focus_metrics_section}
 """
         prompt += "\n"
         
         prompt += f"""
 Please provide a comprehensive weekly analysis with the following sections:
-1. Insights - Blazing fast point-by-point look at only top 3 important/notable metrics, trends, and patterns. Include the image URL of each insight under it's analysis.
-2. Recommendations - 3 data-driven, actionable recommendations
+1. KPI Focus - Bullet list covering every KPI above. Pull only the data that clearly maps to each KPI. If no mapping exists, state "No matching data found" for that KPI.
+2. Insights - Blazing fast point-by-point look at only top 3 important/notable metrics, trends, and patterns tied to the KPIs. Include the image URL of each insight under its analysis.
+3. Recommendations - 3 data-driven, actionable recommendations anchored to the KPI observations
 
 General rule:
-- Focus specifically on the latest week's data. Which spans from {self._get_date_and_week_range()[1]} to {self._get_date_and_week_range()[2]}, give comparisons to the last week of it, laser focused on it!
+- Focus specifically on the latest week's data. Which spans from {week_start} to {week_end}, give comparisons to the last week of it, laser focused on it!
 - Get straight to the point without any heading. Make sure the entire report does not exceed 150 words. Make it condensed like a X post (Twitter tweet).
 - Focus on extracting valuable insights rather than just describing numbers.
-- For each insight, if an image URL is available in 'Insight images', include it directly under its analysis using the Slack link format: <IMAGE_URL|View {{Insight Name}} Image>. Do NOT use Markdown [Text](URL) format. If an image URL is not related to the insight, just ignore it. If there's no image, just don't mention it entirely.
+- For each insight, if an image URL is available in 'Insight images', include it directly under its analysis using the Slack link format: <IMAGE_URL|View Insight Image>. Do NOT use Markdown [Text](URL) format. If an image URL is not related to the insight, just ignore it. If there's no image, just don't mention it entirely.
 - Add 2 new lines between each section.
 
 IMPORTANT: Creatively use these Slack's supported markdown as much as you can to make the report more readable. But do not use other markdown formatting that isn't listed here:
@@ -796,37 +812,44 @@ AGAIN: DO NOT USE OTHER MARKDOWN FORMATTING THAT IS NOT LISTED HERE.
         
         return "\n".join(formatted_output)
     
-    def _get_multi_dashboard_weekly_prompt(self, dashboard_names: List[str], combined_data: Dict) -> str:
+    def _get_multi_dashboard_weekly_prompt(self, dashboard_names: List[str], combined_data: Dict, focus_metrics: Optional[List[str]] = None) -> str:
         """Generate prompt for multi-dashboard weekly analysis."""
         
         # Format the combined data nicely
         formatted_data = self._format_combined_dashboard_data(combined_data)
         
+        current_date, week_start, week_end = self._get_date_and_week_range()
+        focus_metrics_section = ""
+        if focus_metrics:
+            focus_metrics_formatted = "\n".join([f"- {metric}" for metric in focus_metrics])
+            focus_metrics_section = f"\n\nFocus KPIs (analyze only these and ignore unrelated metrics):\n{focus_metrics_formatted}\n"
+
         prompt = f"""Analyze the following Posthog analytics data across multiple dashboards over the past 28 days.
 
 Dashboards: {', '.join(dashboard_names)}
-Today's date: {self._get_date_and_week_range()[0]}
-Current week that spans from: start date: {self._get_date_and_week_range()[1]} to end date: {self._get_date_and_week_range()[2]}
+Today's date: {current_date}
+Current week that spans from: start date: {week_start} to end date: {week_end}
 
 Dashboard Analytics Data:
 {formatted_data}
 
 Insight Images Available:
-{combined_data.get("all_insights_images")}
+{combined_data.get("all_insights_images")}{focus_metrics_section}
 """
         prompt += "\n"
         
         prompt += """
 Please provide a comprehensive cross-dashboard weekly analysis with the following sections:
-1. Insights - Blazing fast point-by-point look at only top 5 important/notable metrics, trends, and patterns across all dashboards. Include the image URL of each insight under its analysis.
-2. Cross-Dashboard Correlations - Identify relationships between metrics from different dashboards
-3. Recommendations - 3 data-driven, actionable recommendations based on the holistic view
+1. KPI Focus - Bullet list covering every KPI above. Pull only the data that clearly maps to each KPI. If no mapping exists, state "No matching data found" for that KPI.
+2. Insights - Blazing fast point-by-point look at only top 5 important/notable metrics, trends, and patterns across all dashboards that tie back to those KPIs. Include the image URL of each insight under its analysis.
+3. Cross-Dashboard Correlations - Identify relationships between KPI movements across different dashboards.
+4. Recommendations - 3 data-driven, actionable recommendations based on the KPI trends.
 
 General rule:
 - Focus specifically on the latest week's data and cross-dashboard patterns
 - Get straight to the point without any heading. Make sure the entire report does not exceed 200 words for multi-dashboard analysis
 - Focus on extracting valuable insights rather than just describing numbers
-- For each insight, if an image URL is available in 'Insight images', include it directly under its analysis using the Slack link format: <IMAGE_URL|View {Insight Name} Image>. Do NOT use Markdown [Text](URL) format. If an image URL is not related to the insight, just ignore it. If there's no image, just don't mention it entirely.
+- For each insight, if an image URL is available in 'Insight images', include it directly under its analysis using the Slack link format: <IMAGE_URL|View Insight Image>. Do NOT use Markdown [Text](URL) format. If an image URL is not related to the insight, just ignore it. If there's no image, just don't mention it entirely.
 - Add 2 new lines between each section.
 
 IMPORTANT: Creatively use these Slack's supported markdown as much as you can to make the report more readable. But do not use other markdown formatting that isn't listed here:
@@ -854,7 +877,13 @@ AGAIN: DO NOT USE OTHER MARKDOWN FORMATTING THAT IS NOT LISTED HERE.
         """
         return self.generate_ai_insights(dashboard_name, days=7, insight_type="daily")
     
-    def generate_weekly_report(self, dashboard_names: List[str], slack_channel_id: Optional[str] = None, slack_thread_ts: Optional[str] = None) -> str:
+    def generate_weekly_report(
+        self,
+        dashboard_names: List[str],
+        slack_channel_id: Optional[str] = None,
+        slack_thread_ts: Optional[str] = None,
+        focus_metrics: Optional[List[str]] = None
+    ) -> str:
         """
         Generate a comprehensive weekly report for multiple dashboards using AI analysis.
         
@@ -869,7 +898,14 @@ AGAIN: DO NOT USE OTHER MARKDOWN FORMATTING THAT IS NOT LISTED HERE.
         try:
             # If only one dashboard, use the existing single dashboard logic
             if len(dashboard_names) == 1:
-                return self.generate_ai_insights(dashboard_names[0], days=28, insight_type="weekly", slack_channel_id=slack_channel_id, slack_thread_ts=slack_thread_ts)
+                return self.generate_ai_insights(
+                    dashboard_names[0],
+                    days=28,
+                    insight_type="weekly",
+                    slack_channel_id=slack_channel_id,
+                    slack_thread_ts=slack_thread_ts,
+                    focus_metrics=focus_metrics
+                )
             
             # For multiple dashboards, combine all data first
             combined_data = {
@@ -890,7 +926,7 @@ AGAIN: DO NOT USE OTHER MARKDOWN FORMATTING THAT IS NOT LISTED HERE.
                     logger.warning(f"Error getting data for {dashboard_name}: {dashboard_data['error']}")
             
             # Generate multi-dashboard prompt
-            prompt = self._get_multi_dashboard_weekly_prompt(dashboard_names, combined_data)
+            prompt = self._get_multi_dashboard_weekly_prompt(dashboard_names, combined_data, focus_metrics)
             
             # Initialize OpenAI client
             openai_api_key = os.environ.get("OPENAI_API_KEY")

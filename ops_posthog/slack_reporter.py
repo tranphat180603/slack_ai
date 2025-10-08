@@ -15,7 +15,13 @@ logger = logging.getLogger("slack_reporter")
 class SlackReporter:
     """Class for sending Posthog reports to Slack channels."""
     
-    def __init__(self, slack_token: str = None, enable_images: bool = True):
+    def __init__(
+        self,
+        slack_token: str = None,
+        enable_images: bool = True,
+        test_mode: bool = False,
+        test_channel_id: str = "C08C6ENV0G0"
+    ):
         """
         Initialize the Slack reporter.
         
@@ -29,25 +35,49 @@ class SlackReporter:
         
         self.slack_client = WebClient(token=self.slack_token)
         self.enable_images = enable_images
+        self.test_mode = test_mode
+        self.test_channel_id = test_channel_id
         logger.info(f"SlackReporter initialized (images: {'enabled' if enable_images else 'disabled'})")
+        if self.test_mode:
+            logger.info(f"SlackReporter running in TEST MODE. All messages will be sent to {self.test_channel_id}")
         
         # Channel mappings - now maps channel IDs to lists of dashboards
         self.channel_dashboards = {
             "C07D7F5531N": {  # marketing channel
                 "channel_name": "Marketing",
-                "dashboards": ["Marketing Dashboard"]
+                "dashboards": ["Marketing Dashboard"],
+                "focus_kpis": [
+                    "New trials per week",
+                    "Trial to paid conversion rate (30-day cohort)",
+                    "Blended CAC per paid user (weekly proxy and monthly closed)",
+                    "Awareness To Trial Conversions"
+                ]
             },
             "C07C44USZKR": {  # product channel
                 "channel_name": "Product",
-                "dashboards": ["Product Dashboard", "Usage Analytics Dashboard", "Trading Dashboard", "Alerts Dashboard"]
+                "dashboards": [
+                    "A A Top 3 Behaviors Driving Retention",
+                    "A KPI Breakdown Per Feature",
+                    "Product Dashboard"
+                ],
+                "focus_kpis": [
+                    "North Star: API Weekly Active Paying Users",
+                    "Activation: API Basic to Paid Plan Conversion",
+                    "Supporting: API Average Weekly API Calls Paying Users",
+                    "North Star: Analytics Weekly Active Paying Users",
+                    "Activation: Analytics Trial to Paid Conversion",
+                    "Supporting: Analytics Paying User W1 Retention",
+                    "North Star: Trading Trading Fees"
+                ]
             },
             "C07F3SD76EA": {  # tm-api channel
                 "channel_name": "TM API",
-                "dashboards": ["API Dashboard", "API Cohort Analysis Dashboard"]
-            },
-            "C092DANQ5RT": {  # tm-moonshot channel
-                "channel_name": "TM Moonshot",
-                "dashboards": ["Moonshot Analytics"]
+                "dashboards": ["API KPIs Dashboard"],
+                "focus_kpis": [
+                    "North Star: API Weekly Active Paying Users",
+                    "Activation: API Basic to Paid Plan Conversion",
+                    "Supporting: API Average Weekly API Calls Paying Users"
+                ]
             },
         }
     
@@ -64,15 +94,19 @@ class SlackReporter:
             Slack API response
         """
         try:
+            target_channel = self.test_channel_id if self.test_mode else channel_id
+            if self.test_mode and channel_id != target_channel:
+                logger.info(f"Test mode rerouting message from {channel_id} to {target_channel}")
+
             response = self.slack_client.chat_postMessage(
-                channel=channel_id,
+                channel=target_channel,
                 text=text,
                 thread_ts=thread_ts,
                 unfurl_links=False,
                 unfurl_media=False,
                 mrkdwn=True
             )
-            logger.info(f"Message sent to channel {channel_id}")
+            logger.info(f"Message sent to channel {target_channel}")
             return response
         except SlackApiError as e:
             logger.error(f"Error sending message to Slack: {e.response['error']}")
@@ -149,22 +183,25 @@ class SlackReporter:
                 channel_config = self.channel_dashboards[channel_id]
                 channel_name = channel_config["channel_name"]
                 dashboard_names = channel_config["dashboards"]
+                focus_kpis = channel_config.get("focus_kpis", [])
                 
                 print(f"Generating weekly report for {channel_name} channel with dashboards: {dashboard_names}")
                 
                 # Generate combined report for all dashboards in this channel
                 # Only pass slack_channel_id if images are enabled
+                target_channel_id = self.test_channel_id if self.test_mode else channel_id
                 report = posthog_client.generate_weekly_report(
                     dashboard_names, 
-                    slack_channel_id=channel_id if self.enable_images else None
+                    slack_channel_id=target_channel_id if self.enable_images else None,
+                    focus_metrics=focus_kpis
                 )
 
                 report_with_title = f"*Weekly Report for {channel_name} Team*\n\n" + report
                 
                 # Send the report to the channel
-                await self.send_message(channel_id, report_with_title + "\n\n") #test channel: C08C6ENV0G0
-                print(f"Weekly report for {channel_name} channel sent to {channel_id}")
-                logger.info(f"Weekly report for {channel_name} channel sent to {channel_id}")
+                await self.send_message(channel_id, report_with_title + "\n\n")
+                print(f"Weekly report for {channel_name} channel sent to {target_channel_id}")
+                logger.info(f"Weekly report for {channel_name} channel sent to {target_channel_id}")
                 success_count += 1
 
             return success_count == len(channel_ids)
@@ -180,6 +217,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Send weekly Posthog reports to Slack')
     parser.add_argument('--no-images', action='store_true', 
                         help='Disable image generation and upload (faster for testing)')
+    parser.add_argument('--test-mode', action='store_true',
+                        help='Route all Slack output to the test channel')
+    parser.add_argument('--test-channel', type=str, default=os.getenv("SLACK_TEST_CHANNEL_ID", "C08C6ENV0G0"),
+                        help='Slack channel ID to use when test mode is enabled')
     
     args = parser.parse_args()
     
@@ -190,7 +231,9 @@ if __name__ == "__main__":
         
         reporter = SlackReporter(
             slack_token=os.getenv("SLACK_BOT_TOKEN"),
-            enable_images=enable_images
+            enable_images=enable_images,
+            test_mode=args.test_mode,
+            test_channel_id=args.test_channel
         )
         
         print(f"🚀 Starting weekly report generation...")
