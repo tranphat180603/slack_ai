@@ -1,5 +1,5 @@
 # Use an Alpine base to avoid apt-based package installs
-FROM python:3.11-alpine
+FROM python:3.11-alpine3.20
 
 ENV PYTHONUNBUFFERED=1 \
     PORT=8000
@@ -7,14 +7,17 @@ ENV PYTHONUNBUFFERED=1 \
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies using apk (no apt involved)
-RUN apk add --no-cache \
-    build-base \
-    postgresql-dev \
-    postgresql-client \
-    ca-certificates \
-    libffi-dev \
-    openssl-dev
+# Configure APK to use DigitalOcean mirrors (more reliable from DO droplets)
+RUN set -eux; \
+    echo "https://mirrors.digitalocean.com/alpine/v3.20/main" > /etc/apk/repositories; \
+    echo "https://mirrors.digitalocean.com/alpine/v3.20/community" >> /etc/apk/repositories; \
+    apk add --no-cache \
+        build-base \
+        postgresql-dev \
+        postgresql-client \
+        ca-certificates \
+        libffi-dev \
+        openssl-dev
 
 # Copy requirements first to leverage Docker cache
 COPY requirements.txt .
