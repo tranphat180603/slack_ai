@@ -30,8 +30,6 @@ services:
   build-image:
     build:
       context: .
-      args:
-        DEBIAN_FRONTEND: noninteractive
     image: slack_ai:latest
     command: ["echo", "Image built successfully"]
     networks:
